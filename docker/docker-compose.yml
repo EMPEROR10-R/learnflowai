@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  learnflow:
+    build: ..
+    ports:
+      - "8501:8501"
+    volumes:
+      - ../users.db:/app/users.db
+      - ../data:/app/data
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    restart: unless-stopped
+    networks:
+      - learnflow-network
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - learnflow-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              count: all
+
+networks:
+  learnflow-network:
+    driver: bridge
+
+volumes:
+  ollama-data:
