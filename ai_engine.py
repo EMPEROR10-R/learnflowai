@@ -1,14 +1,19 @@
 import os
 from typing import Optional, Dict, Any
-from groq import Groq
 import streamlit as st
+
+try:
+    from groq import Groq
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
 
 class AIEngine:
     def __init__(self, api_key: Optional[str] = None):
         self.groq_api_key = api_key
         self.client = None
         
-        if self.groq_api_key:
+        if self.groq_api_key and GROQ_AVAILABLE:
             try:
                 self.client = Groq(api_key=self.groq_api_key)
                 self.engine_type = "groq"

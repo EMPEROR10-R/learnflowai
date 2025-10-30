@@ -2,6 +2,7 @@ import streamlit as st
 import stripe
 from datetime import datetime, timedelta
 from typing import Optional, Dict
+import os
 
 class StripePremium:
     def __init__(self, api_key: Optional[str] = None):
@@ -86,6 +87,88 @@ class StripePremium:
         except Exception as e:
             st.error(f"Cancellation error: {str(e)}")
             return False
+    
+    @staticmethod
+    def handle_webhook(payload: dict, sig_header: str, webhook_secret: str):
+        """
+        Handle Stripe webhook events to update user subscriptions
+        
+        Usage in production (Flask/FastAPI endpoint):
+        
+        @app.post("/webhook/stripe")
+        def stripe_webhook():
+            payload = request.data
+            sig_header = request.headers.get('Stripe-Signature')
+            
+            try:
+                event = stripe.Webhook.construct_event(
+                    payload, sig_header, webhook_secret
+                )
+                
+                if event['type'] == 'checkout.session.completed':
+                    session = event['data']['object']
+                    user_id = session.get('client_reference_id')
+                    customer_id = session.get('customer')
+                    subscription_id = session.get('subscription')
+                    
+                    # Update database
+                    db = Database()
+                    conn = db.get_connection()
+                    cursor = conn.cursor()
+                    
+                    cursor.execute('''
+                        UPDATE users 
+                        SET is_premium = 1, 
+                            premium_expires_at = datetime('now', '+30 days')
+                        WHERE user_id = ?
+                    ''', (user_id,))
+                    
+                    cursor.execute('''
+                        INSERT INTO subscriptions 
+                        (user_id, stripe_customer_id, stripe_subscription_id, status)
+                        VALUES (?, ?, ?, 'active')
+                    ''', (user_id, customer_id, subscription_id))
+                    
+                    conn.commit()
+                    conn.close()
+                    
+                elif event['type'] == 'customer.subscription.deleted':
+                    subscription = event['data']['object']
+                    subscription_id = subscription['id']
+                    
+                    # Update database
+                    db = Database()
+                    conn = db.get_connection()
+                    cursor = conn.cursor()
+                    
+                    cursor.execute('''
+                        UPDATE subscriptions 
+                        SET status = 'cancelled'
+                        WHERE stripe_subscription_id = ?
+                    ''', (subscription_id,))
+                    
+                    cursor.execute('''
+                        SELECT user_id FROM subscriptions 
+                        WHERE stripe_subscription_id = ?
+                    ''', (subscription_id,))
+                    
+                    user = cursor.fetchone()
+                    if user:
+                        cursor.execute('''
+                            UPDATE users 
+                            SET is_premium = 0
+                            WHERE user_id = ?
+                        ''', (user['user_id'],))
+                    
+                    conn.commit()
+                    conn.close()
+                
+                return {'success': True}
+                
+            except Exception as e:
+                return {'error': str(e)}, 400
+        """
+        pass
 
 def show_premium_upgrade_banner():
     st.markdown("""

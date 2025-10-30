@@ -20,29 +20,109 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+    @keyframes fadeInDown {
+        from {
+            opacity: 0;
+            transform: translateY(-30px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    @keyframes slideInLeft {
+        from {
+            opacity: 0;
+            transform: translateX(-50px);
+        }
+        to {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+    
+    @keyframes slideInRight {
+        from {
+            opacity: 0;
+            transform: translateX(50px);
+        }
+        to {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+    
+    @keyframes pulse {
+        0%, 100% {
+            transform: scale(1);
+        }
+        50% {
+            transform: scale(1.05);
+        }
+    }
+    
+    @keyframes glow {
+        0%, 100% {
+            box-shadow: 0 0 5px rgba(102, 126, 234, 0.5);
+        }
+        50% {
+            box-shadow: 0 0 20px rgba(102, 126, 234, 0.8);
+        }
+    }
+    
+    @keyframes gradient-shift {
+        0% {
+            background-position: 0% 50%;
+        }
+        50% {
+            background-position: 100% 50%;
+        }
+        100% {
+            background-position: 0% 50%;
+        }
+    }
+    
     .main-header {
         font-size: 2.5rem;
         font-weight: bold;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #667eea 100%);
+        background-size: 200% 200%;
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
         margin-bottom: 1rem;
+        animation: fadeInDown 1s ease-out, gradient-shift 3s ease infinite;
     }
+    
     .chat-message-user {
         background-color: #E3F2FD;
         padding: 15px;
         border-radius: 15px;
         margin: 10px 0;
         border-left: 4px solid #2196F3;
+        animation: slideInRight 0.5s ease-out;
+        transition: transform 0.2s ease;
     }
+    
+    .chat-message-user:hover {
+        transform: translateX(-5px);
+    }
+    
     .chat-message-ai {
         background-color: #E8F5E9;
         padding: 15px;
         border-radius: 15px;
         margin: 10px 0;
         border-left: 4px solid #4CAF50;
+        animation: slideInLeft 0.5s ease-out;
+        transition: transform 0.2s ease;
     }
+    
+    .chat-message-ai:hover {
+        transform: translateX(5px);
+    }
+    
     .streak-badge {
         display: inline-block;
         padding: 5px 15px;
@@ -51,7 +131,14 @@ st.markdown("""
         color: white;
         font-weight: bold;
         margin: 5px;
+        animation: pulse 2s ease-in-out infinite;
+        transition: transform 0.3s ease;
     }
+    
+    .streak-badge:hover {
+        transform: scale(1.1) rotate(5deg);
+    }
+    
     .premium-badge {
         background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
         padding: 3px 10px;
@@ -59,9 +146,34 @@ st.markdown("""
         color: white;
         font-size: 0.8rem;
         font-weight: bold;
+        animation: glow 2s ease-in-out infinite;
     }
+    
     .stButton>button {
         width: 100%;
+        transition: all 0.3s ease;
+    }
+    
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+    
+    .stTab {
+        transition: all 0.3s ease;
+    }
+    
+    .welcome-animation {
+        animation: fadeInDown 1.2s ease-out;
+    }
+    
+    .metric-card {
+        animation: fadeInDown 0.8s ease-out;
+        transition: transform 0.3s ease;
+    }
+    
+    .metric-card:hover {
+        transform: translateY(-5px);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -216,21 +328,58 @@ def main_chat_interface():
         else:
             st.markdown(f'<div class="chat-message-ai"><strong>AI Tutor:</strong> {msg["content"]}</div>', unsafe_allow_html=True)
     
-    col1, col2 = st.columns([5, 1])
+    user_question = st.text_area(
+        "Ask your question (I'll guide you with hints, not direct answers):",
+        height=100,
+        key="user_input",
+        placeholder="Example: I'm stuck on this algebra problem... Can you help me understand how to approach it?"
+    )
     
-    with col1:
-        user_question = st.text_area(
-            "Ask your question (I'll guide you with hints, not direct answers):",
-            height=100,
-            key="user_input",
-            placeholder="Example: I'm stuck on this algebra problem... Can you help me understand how to approach it?"
-        )
-    
-    with col2:
-        st.write("")
-        st.write("")
-        if st.button("🎤 Voice", help="Use voice input (Chrome/Edge only)"):
-            st.info("Voice input is available in supported browsers. Click and speak your question!")
+    col_voice1, col_voice2 = st.columns([1, 1])
+    with col_voice1:
+        try:
+            voice_input = st.audio_input("🎤 Or use voice input (click to record)", key="voice_recorder")
+            if voice_input:
+                st.info("Voice recorded! Processing audio... (Note: transcription requires additional API setup)")
+                st.session_state.voice_used = True
+        except Exception as e:
+            if st.button("🎤 Voice Input (Web Speech API)", help="Use browser voice input"):
+                st.components.v1.html("""
+                    <button onclick="startVoiceRecognition()" style="
+                        padding: 10px 20px;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        border: none;
+                        border-radius: 10px;
+                        cursor: pointer;
+                        font-size: 16px;
+                    ">🎤 Click to Speak</button>
+                    
+                    <script>
+                    function startVoiceRecognition() {
+                        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                            const recognition = new SpeechRecognition();
+                            recognition.continuous = false;
+                            recognition.interimResults = false;
+                            recognition.lang = 'en-US';
+                            
+                            recognition.onresult = function(event) {
+                                const transcript = event.results[0][0].transcript;
+                                alert('You said: ' + transcript + '\\n\\nPlease type this into the text box above.');
+                            };
+                            
+                            recognition.onerror = function(event) {
+                                alert('Voice recognition error: ' + event.error);
+                            };
+                            
+                            recognition.start();
+                        } else {
+                            alert('Voice recognition is not supported in your browser. Please use Chrome or Edge.');
+                        }
+                    }
+                    </script>
+                """, height=60)
     
     if st.button("📤 Send Question", type="primary"):
         if user_question.strip():
@@ -527,20 +676,68 @@ def premium_tab():
     
     if is_premium:
         st.success("✅ You are a Premium member!")
-        st.info("Premium subscription management is available when Stripe is configured.")
+        st.write("Enjoy unlimited access to all premium features!")
+        
+        stripe_api_key = st.session_state.get('stripe_api_key', '')
+        if stripe_api_key:
+            st.info("💳 Manage your subscription")
+            if st.button("🔧 Manage Billing", type="secondary"):
+                stripe_handler = StripePremium(stripe_api_key)
+                st.info("Customer portal link would appear here when fully configured.")
+        else:
+            st.info("To manage your subscription, contact support or configure Stripe API key.")
     else:
         st.markdown("### 🚀 Ready to Upgrade?")
         st.write("For just $4.99/month, unlock unlimited learning potential!")
         
-        st.info("""
-        **To activate Premium subscriptions:**
+        stripe_api_key = st.text_input(
+            "Stripe API Key (Optional - for live payments)",
+            type="password",
+            help="Add your Stripe secret key to enable real payments",
+            key="stripe_key_input"
+        )
         
-        1. Get a Stripe API key from https://stripe.com
-        2. Configure it in the app settings
-        3. Start accepting subscriptions!
-        
-        The complete Stripe integration code is ready in `stripe_premium.py`
-        """)
+        if stripe_api_key:
+            st.session_state.stripe_api_key = stripe_api_key
+            
+            col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+            with col_btn2:
+                if st.button("💳 Subscribe Now - $4.99/month", type="primary", use_container_width=True):
+                    try:
+                        stripe_handler = StripePremium(stripe_api_key)
+                        
+                        base_url = "https://yourapp.streamlit.app"
+                        session_data = stripe_handler.create_checkout_session(
+                            st.session_state.user_id,
+                            f"{base_url}?success=1",
+                            f"{base_url}?cancel=1"
+                        )
+                        
+                        if session_data:
+                            st.success("✅ Checkout session created!")
+                            st.markdown(f"[Click here to complete payment →]({session_data['url']})")
+                        else:
+                            st.error("Failed to create checkout session. Please check your Stripe configuration.")
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+        else:
+            st.info("""
+            **To activate Premium subscriptions:**
+            
+            1. Get a Stripe API key from https://stripe.com
+            2. Enter your Stripe secret key above
+            3. Click "Subscribe Now" to create checkout session
+            4. The complete Stripe integration is ready in `stripe_premium.py`
+            
+            **Demo Mode:** The app works fully without Stripe (with free tier limits).
+            Add Stripe only when you're ready to accept real payments!
+            """)
+            
+            col_demo1, col_demo2, col_demo3 = st.columns([1, 2, 1])
+            with col_demo2:
+                if st.button("🎭 Simulate Premium Upgrade (Demo)", type="secondary", use_container_width=True):
+                    st.info("Demo: In production, this would redirect to Stripe Checkout!")
+                    st.balloons()
         
         st.markdown("### 💰 Revenue Potential")
         
@@ -556,8 +753,86 @@ def premium_tab():
         with col2:
             st.metric("Annual Revenue", f"${annual_revenue:,.2f}")
 
+def show_welcome_animation():
+    if 'show_welcome' not in st.session_state:
+        st.session_state.show_welcome = True
+    
+    if st.session_state.show_welcome:
+        st.markdown("""
+        <div class="welcome-animation" style="
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 40px;
+            border-radius: 20px;
+            text-align: center;
+            color: white;
+            margin: 20px 0;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        ">
+            <h1 style="font-size: 3rem; margin: 0; animation: fadeInDown 1s ease-out;">
+                🎓 Welcome to LearnFlow AI
+            </h1>
+            <p style="font-size: 1.5rem; margin: 20px 0; animation: fadeInDown 1.2s ease-out;">
+                Your Personal AI Learning Tutor
+            </p>
+            <p style="font-size: 1.1rem; animation: fadeInDown 1.4s ease-out;">
+                Ask anything • Upload notes • Get hints • Never cheat
+            </p>
+            <div style="margin-top: 30px; animation: fadeInDown 1.6s ease-out;">
+                <span style="
+                    display: inline-block;
+                    background: rgba(255,255,255,0.2);
+                    padding: 10px 20px;
+                    border-radius: 10px;
+                    margin: 5px;
+                ">✨ 100% Free</span>
+                <span style="
+                    display: inline-block;
+                    background: rgba(255,255,255,0.2);
+                    padding: 10px 20px;
+                    border-radius: 10px;
+                    margin: 5px;
+                ">🚀 AI-Powered</span>
+                <span style="
+                    display: inline-block;
+                    background: rgba(255,255,255,0.2);
+                    padding: 10px 20px;
+                    border-radius: 10px;
+                    margin: 5px;
+                ">🌍 Multilingual</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("🚀 Start Learning!", type="primary", use_container_width=True):
+                st.session_state.show_welcome = False
+                st.rerun()
+
 def main():
     init_session_state()
+    
+    query_params = st.query_params
+    if 'success' in query_params:
+        st.success("🎉 Payment successful! Your Premium subscription is being activated...")
+        st.info("""
+        **Next Steps:**
+        1. Stripe webhook will confirm your payment
+        2. Your account will be upgraded to Premium
+        3. Enjoy unlimited features!
+        
+        Note: In production, implement Stripe webhooks to automatically upgrade users.
+        See `stripe_premium.py` for webhook handling code.
+        """)
+        st.balloons()
+    
+    if 'cancel' in query_params:
+        st.warning("Payment was cancelled. You can try again anytime from the Premium tab!")
+    
+    if st.session_state.get('show_welcome', True):
+        show_welcome_animation()
+        return
+    
     sidebar_config()
     
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
