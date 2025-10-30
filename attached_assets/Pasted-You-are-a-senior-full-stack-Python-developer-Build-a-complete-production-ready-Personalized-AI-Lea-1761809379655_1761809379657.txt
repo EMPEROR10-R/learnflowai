@@ -1,0 +1,133 @@
+You are a senior full-stack Python developer. Build a complete, production-ready Personalized AI Learning Tutor web app called "LearnFlow AI" using ONLY 100% FREE tools, APIs, and hosting — NO PAID TIERS EVER. The app must:
+- Run on Replit
+- Be downloadable
+- Deploy via Streamlit + GitHub for $0
+- Scale to 100,000+ users using free cloud + self-hosted AI
+- Include premium subscriptions ($4.99/month) via Stripe (commented but ready to activate)
+
+CORE TECH STACK (ALL FREE):
+1. Framework: Streamlit (latest)
+2. AI Engine:
+   - Primary: Groq API Free Tier (Llama 3 8B) – include key input
+   - Fallback: Ollama (self-hosted Llama3) – install guide for Oracle Cloud Free VM
+3. Database: SQLite (users.db)
+4. Hosting: Streamlit Community Cloud (free) + Oracle Cloud Free VM (4-core, 24GB RAM)
+5. Payments: Stripe (commented code – activate with your key later)
+
+15 KILLER FEATURES (ALL FREE TO BUILD):
+
+| # | Feature | FREE Implementation |
+|---|--------|----------------------|
+| 1 | Free Tier + Instant Onboarding | st.session_state → no login, temp user ID |
+| 2 | Long-Term Memory | SQLite: user_id, history, weak_topics, goals |
+| 3 | Voice Input & Output | Web Speech API (browser) + pyttsx3 (offline TTS) |
+| 4 | Upload Notes/PDF → AI Explains | PyPDF2 → extract → send to AI |
+| 5 | Gamified Streaks + Badges | st.metric, st.toast, save in DB |
+| 6 | Multi-Subject (Math, Science, History…) | Dropdown + subject-specific prompts |
+| 7 | Real-Time Socratic Hints | AI gives hints only, never full answers |
+| 8 | Progress Dashboard + Parent View | plotly charts + shareable link |
+| 9 | Offline Mode | Cache lessons via st.javascript + localStorage |
+| 10 | Exam Mode (SAT, GCSE, etc.) | Timed quizzes + score predictor |
+| 11 | Multilingual (50+ languages) | googletrans==4.0.0-rc1 (free, no key) |
+| 12 | AI Essay Grader | nltk + rubric scoring (local) |
+| 13 | <3s Load Time | @st.cache_data, minimal deps |
+| 14 | AI Transparency | Show: "Powered by Groq Llama3" or "Ollama Local" |
+| 15 | Premium Subscriptions ($4.99/mo) | Stripe Checkout – commented but FULLY coded |
+
+PREMIUM SUBSCRIPTION FEATURES (UNLOCKED WITH $4.99/MO):
+# PREMIUM ONLY:
+- Unlimited AI queries (free tier: 10/day)
+- Full PDF uploads (free: 1/day)
+- Offline lesson downloads
+- Parent/Teacher dashboard sharing
+- Advanced analytics + progress reports
+- Priority voice + faster responses
+- Ad-free experience
+
+FILE STRUCTURE (GENERATE ALL):
+
+learnflow-ai/
+├── main.py                  # Full Streamlit app
+├── database.py              # SQLite: users, history, subs
+├── ai_engine.py             # Groq + Ollama wrapper
+├── utils.py                 # PDF, voice, translate, caching
+├── prompts.py               # Subject templates + Socratic hints
+├── stripe_premium.py        # FULL Stripe $4.99/mo integration (commented)
+├── requirements.txt         # 100% FREE packages
+├── README.md                # Deploy + Scale to 100k+ Users
+├── .streamlit/config.toml   # Dark/light theme
+├── docker/                  # Oracle Cloud Free VM setup
+└── assets/                  # Badges, icons (optional)
+
+requirements.txt (ONLY FREE):
+
+streamlit
+groq
+sqlite3
+PyPDF2
+pyttsx3
+nltk
+googletrans==4.0.0-rc1
+plotly
+matplotlib
+stripe
+
+UI/UX SPECS:
+- Mobile-first, clean design
+- Sidebar: Subject | Upload | Voice | Settings | Upgrade to Pro
+- Chat bubbles: User (blue), AI (green)
+- Top bar: Streak counter, badge icons, "Go Pro" button
+- PDF preview in expander
+- Export report → PDF download
+- Premium badge on pro users
+
+STRIPE PREMIUM CODE (READY TO ACTIVATE):
+
+# stripe_premium.py
+import stripe
+stripe.api_key = st.secrets["stripe"]["key"]  # Add to Streamlit secrets later
+
+def create_checkout_session(user_id):
+    return stripe.checkout.Session.create(
+        payment_method_types=['card'],
+        line_items=[{'price': 'price_learnflow_pro_499', 'quantity': 1}],
+        mode='subscription',
+        success_url='https://yourapp.streamlit.app/?success=1',
+        cancel_url='https://yourapp.streamlit.app/?cancel=1',
+        client_reference_id=user_id
+    )
+
+README.md MUST INCLUDE:
+
+# LearnFlow AI – $0 to $10K+/mo AI Tutor
+
+## 1-Click Deploy (FREE)
+1. Fork → Streamlit Cloud → Live in 60s
+2. Add Groq key: https://console.groq.com
+
+## Scale to 100k+ Users (FREE)
+1. Oracle Cloud Always Free VM (4-core, 24GB RAM)
+2. Run: ollama run llama3
+3. Docker + nginx → unlimited queries
+
+## Monetize
+1. Add Stripe key → $4.99/mo
+2. 1,000 users = $4,990/mo
+3. 10,000 users = $49,900/mo
+
+## Viral Hook
+"Ask anything. Upload notes. Get hints. Never cheat."
+
+FINAL OUTPUT:
+Generate ALL files above with FULL, working, copy-paste-ready code  
+Include:
+- Comments
+- Error handling
+- Caching (@st.cache_data)
+- Fallbacks (Groq → Ollama)
+- Stripe premium flow (commented but complete)
+- "How to go from $0 to $10K/mo" in README
+
+GOAL: User pastes this → Replit builds → Click Run → Live AI tutor with premium upsell in <10 minutes.
+
+NO PAID APIs. NO COSTS. HIGH SCALABILITY. PREMIUM READY.
