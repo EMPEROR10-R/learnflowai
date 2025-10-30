@@ -344,7 +344,8 @@ def main_chat_interface():
                 st.session_state.voice_used = True
         except Exception as e:
             if st.button("🎤 Voice Input (Web Speech API)", help="Use browser voice input"):
-                st.components.v1.html("""
+                import streamlit.components.v1 as components
+                components.html("""
                     <button onclick="startVoiceRecognition()" style="
                         padding: 10px 20px;
                         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);

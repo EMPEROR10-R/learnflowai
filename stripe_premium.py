@@ -81,7 +81,8 @@ class StripePremium:
             return False
         
         try:
-            stripe.Subscription.delete(subscription_id)
+            subscription = stripe.Subscription.retrieve(subscription_id)
+            subscription.delete()
             return True
         
         except Exception as e:
