@@ -5,12 +5,26 @@ import streamlit as st
 from googletrans import Translator
 import nltk
 import re
+import pathlib
+
+# Make NLTK find the bundled data
+_nltk_data = pathlib.Path(__file__).parent / "nltk_data"
+if _nltk_data.exists():
+    nltk.data.path.append(str(_nltk_data))
 
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     try:
         nltk.download('punkt', quiet=True)
+    except:
+        pass
+
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    try:
+        nltk.download('punkt_tab', quiet=True)
     except:
         pass
 

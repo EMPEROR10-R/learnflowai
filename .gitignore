@@ -1,0 +1,38 @@
+# === Streamlit secrets (NEVER commit) === 
+.streamlit/secrets.toml 
+.streamlit/config.toml 
+ 
+# === Databases (created fresh in cloud) === 
+*.db 
+*.sqlite3 
+*.sqlite3 
+ 
+# === Python cache === 
+__pycache__/ 
+*.pyc 
+*.pyo 
+*.pyd 
+ 
+# === Virtual environments === 
+venv/ 
+env/ 
+.venv/ 
+ENV/ 
+ 
+# === IDE / OS junk === 
+.DS_Store 
+Thumbs.db 
+.vscode/ 
+.idea/ 
+ 
+# === Local test files (junk) === 
+1 
+70 
+bool 
+datetime.now() 
+dict 
+int 
+List[Dict[str 
+Optional[Dict[str 
+str 
+ 
