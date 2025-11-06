@@ -5,16 +5,19 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 import uuid
 import bcrypt
+import os
 
 class Database:
-    ADMIN_ROLE = "admin"          # <-- NEW
-    PREMIUM_ROLE = "premium"
+    ADMIN_ROLE = "admin"
+    ADMIN_EMAIL = "kingmumo15@gmail.com"
+    ADMIN_PASSWORD = "@Yoounruly10"
 
     def __init__(self, db_path: str = "users.db"):
         self.db_path = db_path
+        print(f"[DB] Initializing database at: {self.db_path}")
         self.init_database()
         self.migrate_schema()
-        self._ensure_admin_user()   # <-- NEW
+        self._ensure_admin_user()  # This MUST run
 
     # ------------------------------------------------------------------ #
     # Connection helper
@@ -28,14 +31,15 @@ class Database:
     # Table creation
     # ------------------------------------------------------------------ #
     def init_database(self):
+        print("[DB] Creating tables if not exist...")
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # ---- users ---------------------------------------------------- #
+        # Users table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
-                email TEXT UNIQUE,
+                email TEXT UNIQUE NOT NULL,
                 password_hash TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -47,11 +51,11 @@ class Database:
                 premium_expires_at TIMESTAMP,
                 language_preference TEXT DEFAULT 'en',
                 learning_goals TEXT DEFAULT '[]',
-                role TEXT DEFAULT 'user'          -- NEW
+                role TEXT DEFAULT 'user'
             )
         """)
 
-        # ---- documents ------------------------------------------------ #
+        # Documents
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS documents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,11 +63,11 @@ class Database:
                 filename TEXT NOT NULL,
                 content_text TEXT,
                 upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         """)
 
-        # ---- chat_history -------------------------------------------- #
+        # Chat history
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,11 +77,11 @@ class Database:
                 content TEXT,
                 session_id TEXT,
                 subject TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         """)
 
-        # ---- essays -------------------------------------------------- #
+        # Essays
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS essays (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,11 +90,11 @@ class Database:
                 title TEXT,
                 content TEXT,
                 grade_json TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         """)
 
-        # ---- exam_results -------------------------------------------- #
+        # Exam results
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS exam_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,61 +105,77 @@ class Database:
                 score INTEGER,
                 total_questions INTEGER,
                 completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         """)
 
         conn.commit()
         conn.close()
+        print("[DB] Tables ready.")
 
     # ------------------------------------------------------------------ #
     # Migration – add missing columns
     # ------------------------------------------------------------------ #
     def migrate_schema(self):
+        print("[DB] Running schema migration...")
         conn = self.get_connection()
         cursor = conn.cursor()
 
         def add_column(table: str, column: str, definition: str):
-            cursor.execute(f"PRAGMA table_info({table})")
-            existing = {row[1] for row in cursor.fetchall()}
-            if column not in existing:
-                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            try:
+                cursor.execute(f"PRAGMA table_info({table})")
+                cols = {row[1] for row in cursor.fetchall()}
+                if column not in cols:
+                    print(f"[MIGRATE] Adding column {column} to {table}")
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            except Exception as e:
+                print(f"[MIGRATE ERROR] {e}")
 
-        # chat_history
+        # Users
+        add_column("users", "role", "TEXT DEFAULT 'user'")
+
+        # Chat history
         add_column("chat_history", "role", "TEXT")
         add_column("chat_history", "content", "TEXT")
         add_column("chat_history", "session_id", "TEXT")
         add_column("chat_history", "subject", "TEXT")
 
-        # users – role column
-        add_column("users", "role", "TEXT DEFAULT 'user'")
-
         conn.commit()
         conn.close()
+        print("[DB] Migration complete.")
 
     # ------------------------------------------------------------------ #
-    # ADMIN USER – created automatically
+    # ADMIN USER – FORCE CREATION
     # ------------------------------------------------------------------ #
     def _ensure_admin_user(self):
-        """Create the hard-coded admin if it does not exist."""
-        admin_email = "kingmumo15@gmail.com"
-        admin_pwd   = "@Yoounruly10"
+        print(f"[ADMIN] Ensuring admin user exists: {self.ADMIN_EMAIL}")
 
-        if self.get_user_by_email(admin_email):
-            return  # already exists
+        if self.get_user_by_email(self.ADMIN_EMAIL):
+            print(f"[ADMIN] Already exists: {self.ADMIN_EMAIL}")
+            return
 
+        print(f"[ADMIN] Creating admin: {self.ADMIN_EMAIL}")
         user_id = str(uuid.uuid4())
-        hashed = bcrypt.hashpw(admin_pwd.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        try:
+            hashed = bcrypt.hashpw(self.ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        except Exception as e:
+            print(f"[ADMIN] bcrypt error: {e}")
+            return
 
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO users 
-            (user_id, email, password_hash, role, is_premium)
-            VALUES (?, ?, ?, ?, 1)
-        """, (user_id, admin_email, hashed, self.ADMIN_ROLE))
-        conn.commit()
-        conn.close()
+        try:
+            cursor.execute("""
+                INSERT INTO users 
+                (user_id, email, password_hash, role, is_premium)
+                VALUES (?, ?, ?, ?, 1)
+            """, (user_id, self.ADMIN_EMAIL, hashed, self.ADMIN_ROLE))
+            conn.commit()
+            print(f"[ADMIN] SUCCESS: Admin created → {self.ADMIN_EMAIL} (ID: {user_id})")
+        except Exception as e:
+            print(f"[ADMIN] FAILED to insert: {e}")
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------ #
     # USER AUTH
@@ -163,33 +183,42 @@ class Database:
     def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+        cursor.execute("SELECT * FROM users WHERE email = ?", (email.lower(),))
         row = cursor.fetchone()
         conn.close()
         return dict(row) if row else None
 
-    def create_user(self, email: str = None, password: str = None) -> str:
+    def create_user(self, email: str, password: str) -> str:
         user_id = str(uuid.uuid4())
-        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8') if password else None
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO users 
-            (user_id, email, password_hash, is_premium, premium_expires_at, role)
-            VALUES (?, ?, ?, 0, NULL, 'user')
-        """, (user_id, email, hashed))
+            (user_id, email, password_hash, role)
+            VALUES (?, ?, ?, 'user')
+        """, (user_id, email.lower(), hashed))
         conn.commit()
         conn.close()
         return user_id
 
     def login_user(self, email: str, password: str) -> Optional[str]:
-        user = self.get_user_by_email(email)
+        user = self.get_user_by_email(email.lower())
         if not user or not user.get('password_hash'):
+            print(f"[LOGIN] Failed: User not found or no password: {email}")
             return None
-        if bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
-            return user['user_id']
-        return None
+
+        try:
+            if bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+                print(f"[LOGIN] SUCCESS: {email} (Role: {user.get('role')})")
+                return user['user_id']
+            else:
+                print(f"[LOGIN] Failed: Wrong password for {email}")
+                return None
+        except Exception as e:
+            print(f"[LOGIN] bcrypt error: {e}")
+            return None
 
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         conn = self.get_connection()
@@ -204,10 +233,13 @@ class Database:
     # ------------------------------------------------------------------ #
     def is_admin(self, user_id: str) -> bool:
         user = self.get_user(user_id)
-        return user.get("role") == self.ADMIN_ROLE if user else False
+        is_admin = user.get("role") == self.ADMIN_ROLE if user else False
+        if is_admin:
+            print(f"[PERM] User {user_id} is ADMIN")
+        return is_admin
 
     # ------------------------------------------------------------------ #
-    # STREAK & BADGES (unchanged)
+    # STREAK & BADGES
     # ------------------------------------------------------------------ #
     def update_streak(self, user_id: str) -> int:
         conn = self.get_connection()
@@ -252,7 +284,6 @@ class Database:
     # LIMITS & PREMIUM
     # ------------------------------------------------------------------ #
     def check_premium(self, user_id: str) -> bool:
-        # Admin is always "premium-like" for limits
         if self.is_admin(user_id):
             return True
         conn = self.get_connection()
@@ -291,14 +322,12 @@ class Database:
         return count
 
     # ------------------------------------------------------------------ #
-    # PDF / CHAT / QUIZ (unchanged – only admin bypasses limits)
+    # PDF / CHAT / QUIZ
     # ------------------------------------------------------------------ #
     def add_pdf_upload(self, user_id: str, filename: str):
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO documents (user_id, filename) VALUES (?, ?)
-        """, (user_id, filename))
+        cursor.execute("INSERT INTO documents (user_id, filename) VALUES (?, ?)", (user_id, filename))
         conn.commit()
         conn.close()
 
@@ -306,17 +335,14 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         session_id = str(uuid.uuid4())
-
         cursor.execute("""
             INSERT INTO chat_history (user_id, role, content, session_id, subject)
             VALUES (?, 'user', ?, ?, ?)
         """, (user_id, user_msg, session_id, subject))
-
         cursor.execute("""
             INSERT INTO chat_history (user_id, role, content, session_id, subject)
             VALUES (?, 'assistant', ?, ?, ?)
         """, (user_id, ai_msg, session_id, subject))
-
         cursor.execute("UPDATE users SET total_queries = total_queries + 1 WHERE user_id = ?", (user_id,))
         conn.commit()
         conn.close()
@@ -328,13 +354,26 @@ class Database:
         conn.commit()
         conn.close()
 
+    def add_quiz_result(self, user_id: str, subject: str, exam_type: str, score: int, total: int):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO exam_results (user_id, subject, exam_type, score, total_questions)
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, subject, exam_type, score, total))
+        conn.commit()
+        conn.close()
+
     # ------------------------------------------------------------------ #
     # ADMIN DASHBOARD HELPERS
     # ------------------------------------------------------------------ #
     def get_all_users(self) -> List[Dict]:
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT user_id, email, role, is_premium, created_at, total_queries, streak_days FROM users")
+        cursor.execute("""
+            SELECT user_id, email, role, is_premium, created_at, total_queries, streak_days 
+            FROM users ORDER BY created_at DESC
+        """)
         rows = cursor.fetchall()
         conn.close()
         return [dict(r) for r in rows]
@@ -350,6 +389,5 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-        # cascade delete will clean related tables because of FOREIGN KEY
         conn.commit()
         conn.close()
