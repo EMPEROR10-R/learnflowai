@@ -9,6 +9,7 @@ import time
 import uuid
 import smtplib
 import random
+import pandas as pd  # <-- NEW: for admin dashboard
 
 from database import Database
 from ai_engine import AIEngine
@@ -34,7 +35,7 @@ st.markdown("""
     @keyframes slideInRight { from {opacity:0; transform:translateX(50px);} to {opacity:1; transform:translateX(0);} }
     @keyframes pulse { 0%,100% {transform:scale(1);} 50% {transform:scale(1.05);} }
     @keyframes glow { 0%,100% {box-shadow:0 0 5px rgba(102,126,234,0.5);} 50% {box-shadow:0 0 20px rgba(102,126,234,0.8);} }
-    @keyframes gradient-shift { 0% {background-position:0% 50%;} 50% {background-position:100% 50%;} 100% {background-position:0% 50%;} }
+    @keyframes gradient-shift { 0% {background-position:0% 50%;} 50% {background-position:100% 50%;} 100% {background-position:0% 50%; } }
 
     .main-header {font-size:2.5rem; font-weight:bold;
         background:linear-gradient(135deg,#009E60 0%,#FFD700 50%,#CE1126 100%);
@@ -49,6 +50,9 @@ st.markdown("""
         background:linear-gradient(135deg,#FF6B6B 0%,#FFE66D 100%); border-radius:20px;
         color:white; font-weight:bold; margin:5px; animation:pulse 2s ease-in-out infinite;}
     .premium-badge {background:linear-gradient(135deg,#FFD700 0%,#FFA500 100%);
+        padding:3px 10px; border-radius:10px; color:white; font-size:.8rem; font-weight:bold;
+        animation:glow 2s ease-in-out infinite;}
+    .admin-badge {background:linear-gradient(135deg,#c80000,#ff4d4d);
         padding:3px 10px; border-radius:10px; color:white; font-size:.8rem; font-weight:bold;
         animation:glow 2s ease-in-out infinite;}
     .stButton>button {width:100%; transition:all .3s ease;}
@@ -89,12 +93,14 @@ def init_session_state():
         "show_voice_button": True,
         "show_welcome": True,
         "logged_in": False,
+        "is_admin": False,
+        "user_id": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
-    if "user_id" not in st.session_state:
+    if "user_id" not in st.session_state or not st.session_state.user_id:
         db = init_database()
         st.session_state.user_id = db.create_user()
 
@@ -110,6 +116,12 @@ def check_and_update_streak():
     return streak
 
 def check_premium_limits(db: Database) -> dict:
+    if st.session_state.is_admin:
+        return {
+            "can_query": True, "can_upload_pdf": True,
+            "queries_left": "Unlimited", "pdfs_left": "Unlimited", "is_premium": True
+        }
+
     is_premium = db.check_premium(st.session_state.user_id)
     if is_premium:
         return {"can_query": True, "can_upload_pdf": True,
@@ -137,6 +149,9 @@ def sidebar_config():
         if limits["is_premium"]:
             st.markdown('<span class="premium-badge">PREMIUM</span>', unsafe_allow_html=True)
 
+        if st.session_state.is_admin:
+            st.markdown('<span class="admin-badge">ADMIN</span>', unsafe_allow_html=True)
+
         streak = check_and_update_streak()
         st.markdown(f'<span class="streak-badge">{streak} Day Streak</span>', unsafe_allow_html=True)
 
@@ -160,7 +175,7 @@ def sidebar_config():
         st.session_state.language = lang_map[sel_lang]
 
         st.markdown("---")
-        if not limits["is_premium"]:
+        if not limits["is_premium"] and not st.session_state.is_admin:
             st.markdown("### Daily Limits (Free)")
             st.metric("AI Queries Left", f"{limits['queries_left']}/10")
             st.metric("PDF Uploads Left", f"{limits['pdfs_left']}/1")
@@ -280,7 +295,7 @@ def progress_dashboard_tab():
     c2.metric("Streak", f"{user.get('streak_days', 0)} days")
     badges = json.loads(user.get("badges", "[]"))
     c3.metric("Badges", len(badges))
-    c4.metric("Status", "Premium" if db.check_premium(st.session_state.user_id) else "Free")
+    c4.metric("Status", "Admin" if st.session_state.is_admin else ("Premium" if db.check_premium(st.session_state.user_id) else "Free"))
 
 def exam_mode_tab():
     db = init_database()
@@ -354,6 +369,55 @@ def premium_tab():
         st.info("In production: This opens Stripe Checkout.")
 
 # ----------------------------------------------------------------------
+# ADMIN DASHBOARD
+# ----------------------------------------------------------------------
+def admin_dashboard_tab():
+    if not st.session_state.is_admin:
+        st.error("Access denied.")
+        return
+
+    st.markdown("## Admin Dashboard")
+    db = init_database()
+
+    # List all users
+    users = db.get_all_users()
+    df = pd.DataFrame(users)
+    if not df.empty:
+        df["created_at"] = pd.to_datetime(df["created_at"]).dt.strftime("%Y-%m-%d")
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No users yet.")
+
+    # Manage users
+    st.markdown("### Manage Users")
+    if users:
+        selected_uid = st.selectbox("Select user", df["user_id"], format_func=lambda x: next(u["email"] for u in users if u["user_id"] == x))
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Toggle Premium"):
+                db.toggle_premium(selected_uid)
+                st.success("Premium status toggled.")
+                st.rerun()
+        with col2:
+            if st.button("Delete User", type="secondary"):
+                if st.session_state.user_id == selected_uid:
+                    st.error("You cannot delete yourself.")
+                else:
+                    db.delete_user(selected_uid)
+                    st.success("User deleted.")
+                    st.rerun()
+
+    # System stats
+    st.markdown("### System Stats")
+    total_users = len(users)
+    premium_users = sum(1 for u in users if u["is_premium"])
+    admin_users = sum(1 for u in users if u.get("role") == "admin")
+    st.metric("Total Users", total_users)
+    st.metric("Premium Users", premium_users)
+    st.metric("Admin Users", admin_users)
+
+# ----------------------------------------------------------------------
 # Welcome & Login
 # ----------------------------------------------------------------------
 def show_welcome_animation():
@@ -393,6 +457,7 @@ def login_signup_block():
                 uid = db.create_user(email, pwd)
                 st.session_state.user_id = uid
                 st.session_state.logged_in = True
+                st.session_state.is_admin = db.is_admin(uid)
                 st.success("Account created!")
                 st.rerun()
     else:
@@ -403,6 +468,7 @@ def login_signup_block():
             if uid:
                 st.session_state.user_id = uid
                 st.session_state.logged_in = True
+                st.session_state.is_admin = db.is_admin(uid)
                 st.success("Logged in!")
                 st.rerun()
             else:
@@ -430,16 +496,21 @@ def main():
     login_signup_block()
     sidebar_config()
 
-    t1, t2, t3, t4, t5, t6 = st.tabs([
-        "Chat Tutor", "PDF Upload", "Progress", "Exam Prep",
-        "Essay Grader", "Premium"
-    ])
-    with t1: main_chat_interface()
-    with t2: pdf_upload_tab()
-    with t3: progress_dashboard_tab()
-    with t4: exam_mode_tab()
-    with t5: essay_grader_tab()
-    with t6: premium_tab()
+    # Tabs
+    tab_names = ["Chat Tutor", "PDF Upload", "Progress", "Exam Prep", "Essay Grader", "Premium"]
+    if st.session_state.is_admin:
+        tab_names.append("Admin Dashboard")
+
+    tabs = st.tabs(tab_names)
+
+    with tabs[0]: main_chat_interface()
+    with tabs[1]: pdf_upload_tab()
+    with tabs[2]: progress_dashboard_tab()
+    with tabs[3]: exam_mode_tab()
+    with tabs[4]: essay_grader_tab()
+    with tabs[5]: premium_tab()
+    if st.session_state.is_admin and len(tabs) > 6:
+        with tabs[6]: admin_dashboard_tab()
 
     st.caption("LearnFlow AI – KCPE • KPSEA • KJSEA • KCSE")
 
