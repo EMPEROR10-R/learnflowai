@@ -1,7 +1,6 @@
 streamlit
 google-genai
 PyPDF2
-pyttsx3
 nltk
 googletrans
 plotly
@@ -9,10 +8,6 @@ matplotlib
 stripe
 requests
 pymupdf
-nltk
-sqlite3
 bcrypt
 gtts
-SpeechRecognition
-pydub
 pandas
