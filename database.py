@@ -35,11 +35,11 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # Users table
+        # Users table (email UNIQUE but not NOT NULL to allow anonymous users)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
-                email TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE,
                 password_hash TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -169,7 +169,7 @@ class Database:
                 INSERT INTO users 
                 (user_id, email, password_hash, role, is_premium)
                 VALUES (?, ?, ?, ?, 1)
-            """, (user_id, self.ADMIN_EMAIL, hashed, self.ADMIN_ROLE))
+            """, (user_id, self.ADMIN_EMAIL.lower(), hashed, self.ADMIN_ROLE))
             conn.commit()
             print(f"[ADMIN] SUCCESS: Admin created → {self.ADMIN_EMAIL} (ID: {user_id})")
         except Exception as e:
@@ -181,6 +181,8 @@ class Database:
     # USER AUTH
     # ------------------------------------------------------------------ #
     def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        if not email:
+            return None
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE email = ?", (email.lower(),))
@@ -188,23 +190,30 @@ class Database:
         conn.close()
         return dict(row) if row else None
 
-    def create_user(self, email: str, password: str) -> str:
+    def create_user(self, email: Optional[str] = None, password: Optional[str] = None) -> str:
         user_id = str(uuid.uuid4())
-        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8') if password else None
+        email_value = email.lower() if email else None
 
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO users 
-            (user_id, email, password_hash, role)
-            VALUES (?, ?, ?, 'user')
-        """, (user_id, email.lower(), hashed))
-        conn.commit()
-        conn.close()
+        try:
+            cursor.execute("""
+                INSERT INTO users 
+                (user_id, email, password_hash, role, is_premium, premium_expires_at)
+                VALUES (?, ?, ?, 'user', 0, NULL)
+            """, (user_id, email_value, hashed))
+            conn.commit()
+            print(f"[USER] Created user ID: {user_id} (Email: {email_value})")
+        except Exception as e:
+            print(f"[USER] Failed to create user: {e}")
+            raise
+        finally:
+            conn.close()
         return user_id
 
     def login_user(self, email: str, password: str) -> Optional[str]:
-        user = self.get_user_by_email(email.lower())
+        user = self.get_user_by_email(email)
         if not user or not user.get('password_hash'):
             print(f"[LOGIN] Failed: User not found or no password: {email}")
             return None
@@ -249,8 +258,8 @@ class Database:
 
         cursor.execute("SELECT last_streak_date, streak_days FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
-        last_date = row['last_streak_date']
-        streak = row['streak_days'] or 0
+        last_date = row['last_streak_date'] if row else None
+        streak = row['streak_days'] or 0 if row else 0
 
         if last_date == str(today):
             conn.close()
