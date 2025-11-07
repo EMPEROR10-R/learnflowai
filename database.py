@@ -35,7 +35,7 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # Users table (email UNIQUE but not NOT NULL to allow anonymous users)
+        # Users table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
