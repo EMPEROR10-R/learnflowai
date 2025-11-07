@@ -17,25 +17,18 @@ class Database:
         print(f"[DB] Initializing database at: {self.db_path}")
         self.init_database()
         self.migrate_schema()
-        self._ensure_admin_user()  # This MUST run
+        self._ensure_admin_user()
 
-    # ------------------------------------------------------------------ #
-    # Connection helper
-    # ------------------------------------------------------------------ #
     def get_connection(self):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
-    # ------------------------------------------------------------------ #
-    # Table creation
-    # ------------------------------------------------------------------ #
     def init_database(self):
         print("[DB] Creating tables if not exist...")
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # Users table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
@@ -55,7 +48,6 @@ class Database:
             )
         """)
 
-        # Documents
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS documents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +59,6 @@ class Database:
             )
         """)
 
-        # Chat history
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,7 +72,6 @@ class Database:
             )
         """)
 
-        # Essays
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS essays (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,7 +84,6 @@ class Database:
             )
         """)
 
-        # Exam results
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS exam_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,9 +102,6 @@ class Database:
         conn.close()
         print("[DB] Tables ready.")
 
-    # ------------------------------------------------------------------ #
-    # Migration – add missing columns
-    # ------------------------------------------------------------------ #
     def migrate_schema(self):
         print("[DB] Running schema migration...")
         conn = self.get_connection()
@@ -131,10 +117,7 @@ class Database:
             except Exception as e:
                 print(f"[MIGRATE ERROR] {e}")
 
-        # Users
         add_column("users", "role", "TEXT DEFAULT 'user'")
-
-        # Chat history
         add_column("chat_history", "role", "TEXT")
         add_column("chat_history", "content", "TEXT")
         add_column("chat_history", "session_id", "TEXT")
@@ -144,12 +127,8 @@ class Database:
         conn.close()
         print("[DB] Migration complete.")
 
-    # ------------------------------------------------------------------ #
-    # ADMIN USER – FORCE CREATION
-    # ------------------------------------------------------------------ #
     def _ensure_admin_user(self):
         print(f"[ADMIN] Ensuring admin user exists: {self.ADMIN_EMAIL}")
-
         if self.get_user_by_email(self.ADMIN_EMAIL):
             print(f"[ADMIN] Already exists: {self.ADMIN_EMAIL}")
             return
@@ -177,12 +156,8 @@ class Database:
         finally:
             conn.close()
 
-    # ------------------------------------------------------------------ #
-    # USER AUTH
-    # ------------------------------------------------------------------ #
     def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        if not email:
-            return None
+        if not email: return None
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE email = ?", (email.lower(),))
@@ -237,9 +212,6 @@ class Database:
         conn.close()
         return dict(row) if row else None
 
-    # ------------------------------------------------------------------ #
-    # ADMIN HELPERS
-    # ------------------------------------------------------------------ #
     def is_admin(self, user_id: str) -> bool:
         user = self.get_user(user_id)
         is_admin = user.get("role") == self.ADMIN_ROLE if user else False
@@ -247,9 +219,6 @@ class Database:
             print(f"[PERM] User {user_id} is ADMIN")
         return is_admin
 
-    # ------------------------------------------------------------------ #
-    # STREAK & BADGES
-    # ------------------------------------------------------------------ #
     def update_streak(self, user_id: str) -> int:
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -289,12 +258,8 @@ class Database:
         conn.commit()
         conn.close()
 
-    # ------------------------------------------------------------------ #
-    # LIMITS & PREMIUM
-    # ------------------------------------------------------------------ #
     def check_premium(self, user_id: str) -> bool:
-        if self.is_admin(user_id):
-            return True
+        if self.is_admin(user_id): return True
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT is_premium FROM users WHERE user_id = ?", (user_id,))
@@ -303,8 +268,7 @@ class Database:
         return bool(row['is_premium']) if row else False
 
     def get_daily_query_count(self, user_id: str) -> int:
-        if self.is_admin(user_id):
-            return 0
+        if self.is_admin(user_id): return 0
         conn = self.get_connection()
         cursor = conn.cursor()
         today = datetime.now().date()
@@ -317,8 +281,7 @@ class Database:
         return count
 
     def get_pdf_count_today(self, user_id: str) -> int:
-        if self.is_admin(user_id):
-            return 0
+        if self.is_admin(user_id): return 0
         conn = self.get_connection()
         cursor = conn.cursor()
         today = datetime.now().date()
@@ -330,9 +293,6 @@ class Database:
         conn.close()
         return count
 
-    # ------------------------------------------------------------------ #
-    # PDF / CHAT / QUIZ
-    # ------------------------------------------------------------------ #
     def add_pdf_upload(self, user_id: str, filename: str):
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -373,9 +333,6 @@ class Database:
         conn.commit()
         conn.close()
 
-    # ------------------------------------------------------------------ #
-    # ADMIN DASHBOARD HELPERS
-    # ------------------------------------------------------------------ #
     def get_all_users(self) -> List[Dict]:
         conn = self.get_connection()
         cursor = conn.cursor()

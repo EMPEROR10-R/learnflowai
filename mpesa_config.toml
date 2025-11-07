@@ -1,0 +1,6 @@
+# mpesa_config.toml
+# DO NOT COMMIT TO GIT! Add to .gitignore
+
+[mpesa.daraja]
+consumer_key    = "4BcIP7LtB5oLjnwewHP6MOABGGd2AjDcQJc0NFbnPAyJhG5T"
+consumer_secret = "7mk1O3sqHx69QETjAbEGLdZXrVJywvwazlMtK8k5wbP4cpWyfOJdssgsH6Uxzw4r"

@@ -9,20 +9,20 @@ import time
 import uuid
 import smtplib
 import random
-import pandas as pd  # <-- NEW: for admin dashboard
-
+import pandas as pd
 from database import Database
 from ai_engine import AIEngine
 from utils import Translator_Utils, EssayGrader, VoiceInputHelper
 from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
 from stripe_premium import StripePremium, show_premium_upgrade_banner, show_premium_benefits
+from mpesa_auth import get_oauth_token  # M-Pesa OAuth Fix
 import streamlit.components.v1 as components
 
 # ----------------------------------------------------------------------
 # Page config & CSS
 # ----------------------------------------------------------------------
 st.set_page_config(
-    page_title="LearnFlow AI - Kenyan AI Tutor (KCPE, KPSEA, KJSEA, KCSE)",
+    page_title="LearnFlow AI - Kenyan AI Tutor",
     page_icon="Kenya",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -49,12 +49,8 @@ st.markdown("""
     .streak-badge {display:inline-block; padding:5px 15px;
         background:linear-gradient(135deg,#FF6B6B 0%,#FFE66D 100%); border-radius:20px;
         color:white; font-weight:bold; margin:5px; animation:pulse 2s ease-in-out infinite;}
-    .premium-badge {background:linear-gradient(135deg,#FFD700 0%,#FFA500 100%);
-        padding:3px 10px; border-radius:10px; color:white; font-size:.8rem; font-weight:bold;
-        animation:glow 2s ease-in-out infinite;}
-    .admin-badge {background:linear-gradient(135deg,#c80000,#ff4d4d);
-        padding:3px 10px; border-radius:10px; color:white; font-size:.8rem; font-weight:bold;
-        animation:glow 2s ease-in-out infinite;}
+    .premium-badge {background:linear-gradient(135deg,#FFD700 0%,#FFA500 0%); padding:3px 10px; border-radius:10px; color:white; font-size:.8rem; font-weight:bold; animation:glow 2s ease-in-out infinite;}
+    .admin-badge {background:linear-gradient(135deg,#c80000,#ff4d4d); padding:3px 10px; border-radius:10px; color:white; font-size:.8rem; font-weight:bold; animation:glow 2s ease-in-out infinite;}
     .stButton>button {width:100%; transition:all .3s ease;}
     .stButton>button:hover {transform:translateY(-2px); box-shadow:0 5px 15px rgba(0,158,96,.4);}
     .welcome-animation {animation:fadeInDown 1.2s ease-out;}
@@ -63,7 +59,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------
-# Cached resources
+# Cached Resources
 # ----------------------------------------------------------------------
 @st.cache_resource
 def init_database() -> Database:
@@ -77,13 +73,12 @@ def init_translator() -> Translator_Utils:
 def init_ai_engine() -> AIEngine:
     gemini_key = st.secrets.get("GEMINI_API_KEY", "")
     hf_key = st.secrets.get("HF_API_KEY", "")
-    print("GEMINI_KEY_LOADED:", bool(gemini_key))
     return AIEngine(gemini_key, hf_key)
 
 ai_engine = init_ai_engine()
 
 # ----------------------------------------------------------------------
-# Session-state helpers
+# Session State
 # ----------------------------------------------------------------------
 def init_session_state():
     defaults = {
@@ -95,6 +90,7 @@ def init_session_state():
         "logged_in": False,
         "is_admin": False,
         "user_id": None,
+        "show_premium": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -105,7 +101,7 @@ def init_session_state():
         st.session_state.user_id = db.create_user()
 
 # ----------------------------------------------------------------------
-# Streak & limits
+# Streak & Limits
 # ----------------------------------------------------------------------
 def check_and_update_streak():
     db = init_database()
@@ -117,15 +113,11 @@ def check_and_update_streak():
 
 def check_premium_limits(db: Database) -> dict:
     if st.session_state.is_admin:
-        return {
-            "can_query": True, "can_upload_pdf": True,
-            "queries_left": "Unlimited", "pdfs_left": "Unlimited", "is_premium": True
-        }
+        return {"can_query": True, "can_upload_pdf": True, "queries_left": "∞", "pdfs_left": "∞", "is_premium": True}
 
     is_premium = db.check_premium(st.session_state.user_id)
     if is_premium:
-        return {"can_query": True, "can_upload_pdf": True,
-                "queries_left": "Unlimited", "pdfs_left": "Unlimited", "is_premium": True}
+        return {"can_query": True, "can_upload_pdf": True, "queries_left": "∞", "pdfs_left": "∞", "is_premium": True}
 
     queries = db.get_daily_query_count(st.session_state.user_id)
     pdfs    = db.get_pdf_count_today(st.session_state.user_id)
@@ -148,7 +140,6 @@ def sidebar_config():
 
         if limits["is_premium"]:
             st.markdown('<span class="premium-badge">PREMIUM</span>', unsafe_allow_html=True)
-
         if st.session_state.is_admin:
             st.markdown('<span class="admin-badge">ADMIN</span>', unsafe_allow_html=True)
 
@@ -200,21 +191,22 @@ def main_chat_interface():
         st.markdown(f'<div class="{cls}"><strong>{role}:</strong> {msg["content"]}</div>', unsafe_allow_html=True)
 
     user_question = st.text_area(
-        "Ask your question (I'll give hints, not direct answers):",
+        "Ask your question:",
         height=100, key="user_input",
         placeholder="e.g. Explain photosynthesis in simple terms…"
     )
 
     col_v1, _ = st.columns([1, 4])
     with col_v1:
-        if st.button("Voice Input"):
+        if st.button("Voice"):
             components.html(VoiceInputHelper.get_voice_input_html(), height=120)
 
-    if st.button("Send Question", type="primary"):
+    if st.button("Send", type="primary"):
         if not user_question.strip():
+            st.warning("Please enter a question.")
             return
         if not limits["can_query"]:
-            st.error("Daily query limit reached! Upgrade for unlimited.")
+            st.error("Daily query limit reached!")
             show_premium_upgrade_banner()
             return
 
@@ -234,12 +226,7 @@ def main_chat_interface():
 
         st.session_state.chat_history.append({"role": "assistant", "content": response})
 
-        db.add_chat_history(
-            st.session_state.user_id,
-            st.session_state.current_subject,
-            user_question,
-            response
-        )
+        db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, user_question, response)
         db.update_user_activity(st.session_state.user_id)
 
         if len(st.session_state.chat_history) == 2:
@@ -260,11 +247,11 @@ def pdf_upload_tab():
 
     uploaded = st.file_uploader("Choose a PDF", type=["pdf"])
     if uploaded:
-        with st.spinner("Extracting text from PDF…"):
+        with st.spinner("Extracting text…"):
             txt = ai_engine.extract_text_from_pdf(uploaded.read())
 
         st.success(f"Extracted {len(txt)} characters")
-        with st.expander("Raw Extracted Text (Debug)", expanded=False):
+        with st.expander("Raw Text", expanded=False):
             st.code(txt[:2000] + ("..." if len(txt) > 2000 else ""))
 
         db.add_pdf_upload(st.session_state.user_id, uploaded.name)
@@ -275,11 +262,9 @@ def pdf_upload_tab():
             if not q.strip():
                 st.warning("Please ask a question.")
                 return
-
             with st.spinner("Analyzing…"):
-                system_prompt = "Answer in 1-3 short sentences. Be direct. No reasoning. No questions back."
                 prompt = f"Document:\n{txt[:3000]}\n\nQuestion: {q}"
-                resp = ai_engine.generate_response(prompt, system_prompt)
+                resp = ai_engine.generate_response(prompt, "Answer in 1-3 short sentences.")
                 st.markdown(f'<div class="chat-message-ai"><strong>AI Tutor:</strong> {resp}</div>', unsafe_allow_html=True)
                 db.add_chat_history(st.session_state.user_id, "PDF", q, resp)
 
@@ -315,10 +300,9 @@ def exam_mode_tab():
             show_premium_upgrade_banner()
             return
 
-        with st.spinner("Generating exam-style questions…"):
+        with st.spinner("Generating…"):
             prompt = f"Generate {num_questions} {exam} practice questions in {subject}. Include 4 options (A-D), one correct answer, and a brief explanation. Use Kenyan curriculum style."
-            sys_prompt = "You are an expert Kenyan exam generator. Output clean markdown: **Q1:** ... **Options:** A) ... **Answer:** B **Explanation:** ..."
-            resp = ai_engine.generate_response(prompt, sys_prompt)
+            resp = ai_engine.generate_response(prompt, "You are an expert Kenyan exam generator. Output clean markdown.")
             st.markdown(resp)
             db.add_chat_history(st.session_state.user_id, f"{exam} Practice", f"Generate {num_questions} Qs in {subject}", resp)
 
@@ -327,13 +311,13 @@ def exam_mode_tab():
     if st.button("Submit Score"):
         pct = score / num_questions * 100
         if pct >= 80:
-            st.success(f"**{pct:.0f}% – Excellent!** You're ready for {exam} in {subject}.")
+            st.success(f"**{pct:.0f}% – Excellent!**")
             db.add_badge(st.session_state.user_id, "quiz_ace")
             st.balloons()
         elif pct >= 60:
-            st.info(f"**{pct:.0f}% – Good!** Keep practicing {subject}.")
+            st.info(f"**{pct:.0f}% – Good!** Keep practicing.")
         else:
-            st.warning(f"**{pct:.0f}% – Review {subject}** before {exam}.")
+            st.warning(f"**{pct:.0f}% – Review {subject}**")
         db.add_quiz_result(st.session_state.user_id, subject, exam, score, num_questions)
 
 def essay_grader_tab():
@@ -343,7 +327,7 @@ def essay_grader_tab():
         if not essay.strip():
             st.warning("Please enter your essay.")
             return
-        with st.spinner("Grading your essay…"):
+        with st.spinner("Grading…"):
             grader = EssayGrader()
             res = grader.grade_essay(essay)
             st.markdown(f"**Score:** {res['total_score']}/100 – {res['overall']}")
@@ -364,9 +348,13 @@ def premium_tab():
         return
 
     st.write("**$4.99 / month** – Unlimited queries, PDFs, and exam practice")
-    if st.button("Demo Upgrade"):
-        st.balloons()
-        st.info("In production: This opens Stripe Checkout.")
+    if st.button("Pay with M-Pesa"):
+        try:
+            token = get_oauth_token()  # Fixed M-Pesa OAuth
+            st.success("M-Pesa token received! (Demo)")
+            st.info("In production: STK Push would be sent.")
+        except Exception as e:
+            st.error(f"M-Pesa error: {e}")
 
 # ----------------------------------------------------------------------
 # ADMIN DASHBOARD
@@ -378,8 +366,6 @@ def admin_dashboard_tab():
 
     st.markdown("## Admin Dashboard")
     db = init_database()
-
-    # List all users
     users = db.get_all_users()
     df = pd.DataFrame(users)
     if not df.empty:
@@ -388,53 +374,27 @@ def admin_dashboard_tab():
     else:
         st.info("No users yet.")
 
-    # Manage users
     st.markdown("### Manage Users")
     if users:
         selected_uid = st.selectbox("Select user", df["user_id"], format_func=lambda x: next(u["email"] for u in users if u["user_id"] == x))
-
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Toggle Premium"):
                 db.toggle_premium(selected_uid)
-                st.success("Premium status toggled.")
+                st.success("Toggled.")
                 st.rerun()
         with col2:
             if st.button("Delete User", type="secondary"):
                 if st.session_state.user_id == selected_uid:
-                    st.error("You cannot delete yourself.")
+                    st.error("Cannot delete self.")
                 else:
                     db.delete_user(selected_uid)
-                    st.success("User deleted.")
+                    st.success("Deleted.")
                     st.rerun()
 
-    # System stats
-    st.markdown("### System Stats")
-    total_users = len(users)
-    premium_users = sum(1 for u in users if u["is_premium"])
-    admin_users = sum(1 for u in users if u.get("role") == "admin")
-    st.metric("Total Users", total_users)
-    st.metric("Premium Users", premium_users)
-    st.metric("Admin Users", admin_users)
-
 # ----------------------------------------------------------------------
-# Welcome & Login
+# Login / Signup
 # ----------------------------------------------------------------------
-def show_welcome_animation():
-    if st.session_state.get("show_welcome", True):
-        st.markdown("""
-        <div class="welcome-animation" style="background:linear-gradient(135deg,#009E60,#FFD700); padding:40px; border-radius:20px; text-align:center; color:white; margin:20px 0; box-shadow:0 10px 30px rgba(0,0,0,.2);">
-            <h1 style="font-size:3rem; margin:0;">LearnFlow AI</h1>
-            <p style="font-size:1.5rem;">Your Kenyan AI Tutor</p>
-            <p>KCPE • KPSEA • KJSEA • KCSE Ready</p>
-        </div>
-        """, unsafe_allow_html=True)
-        _, col, _ = st.columns([1, 1, 1])
-        with col:
-            if st.button("Start Learning!", type="primary", use_container_width=True):
-                st.session_state.show_welcome = False
-                st.rerun()
-
 def login_signup_block():
     if st.session_state.logged_in:
         return
@@ -452,7 +412,7 @@ def login_signup_block():
             elif not pwd:
                 st.error("Password required.")
             elif db.get_user_by_email(email):
-                st.error("Email already taken.")
+                st.error("Email taken.")
             else:
                 uid = db.create_user(email, pwd)
                 st.session_state.user_id = uid
@@ -477,6 +437,24 @@ def login_signup_block():
     st.stop()
 
 # ----------------------------------------------------------------------
+# Welcome
+# ----------------------------------------------------------------------
+def show_welcome_animation():
+    if st.session_state.get("show_welcome", True):
+        st.markdown("""
+        <div class="welcome-animation" style="background:linear-gradient(135deg,#009E60,#FFD700); padding:40px; border-radius:20px; text-align:center; color:white; margin:20px 0; box-shadow:0 10px 30px rgba(0,0,0,.2);">
+            <h1 style="font-size:3rem; margin:0;">LearnFlow AI</h1>
+            <p style="font-size:1.5rem;">Your Kenyan AI Tutor</p>
+            <p>KCPE • KPSEA • KJSEA • KCSE Ready</p>
+        </div>
+        """, unsafe_allow_html=True)
+        _, col, _ = st.columns([1, 1, 1])
+        with col:
+            if st.button("Start Learning!", type="primary", use_container_width=True):
+                st.session_state.show_welcome = False
+                st.rerun()
+
+# ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
 def main():
@@ -484,7 +462,7 @@ def main():
 
     qp = st.query_params
     if "success" in qp:
-        st.success("Payment succeeded! Premium activated.")
+        st.success("Payment succeeded!")
         st.balloons()
     if "cancel" in qp:
         st.warning("Payment cancelled.")
@@ -496,7 +474,6 @@ def main():
     login_signup_block()
     sidebar_config()
 
-    # Tabs
     tab_names = ["Chat Tutor", "PDF Upload", "Progress", "Exam Prep", "Essay Grader", "Premium"]
     if st.session_state.is_admin:
         tab_names.append("Admin Dashboard")
