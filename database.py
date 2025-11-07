@@ -42,9 +42,21 @@ class Database:
                 badges TEXT DEFAULT '[]',
                 is_premium BOOLEAN DEFAULT 0,
                 premium_expires_at TIMESTAMP,
+                last_payment_ref TEXT,
+                last_payment_amount REAL,
                 language_preference TEXT DEFAULT 'en',
                 learning_goals TEXT DEFAULT '[]',
                 role TEXT DEFAULT 'user'
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_payments (
+                checkout_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                phone TEXT,
+                amount REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -118,6 +130,8 @@ class Database:
                 print(f"[MIGRATE ERROR] {e}")
 
         add_column("users", "role", "TEXT DEFAULT 'user'")
+        add_column("users", "last_payment_ref", "TEXT")
+        add_column("users", "last_payment_amount", "REAL")
         add_column("chat_history", "role", "TEXT")
         add_column("chat_history", "content", "TEXT")
         add_column("chat_history", "session_id", "TEXT")
@@ -355,5 +369,47 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+
+    # M-Pesa Payment Methods (New/Fixed)
+    def record_pending_payment(self, user_id: str, phone: str, amount: float, checkout_id: str):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO pending_payments 
+            (checkout_id, user_id, phone, amount)
+            VALUES (?, ?, ?, ?)
+        """, (checkout_id, user_id, phone, amount))
+        conn.commit()
+        conn.close()
+
+    def get_pending_payment(self, checkout_id: str) -> Optional[Dict]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pending_payments WHERE checkout_id = ?", (checkout_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def clear_pending_payment(self, checkout_id: str):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM pending_payments WHERE checkout_id = ?", (checkout_id,))
+        conn.commit()
+        conn.close()
+
+    def activate_premium(self, user_id: str, amount: float, mpesa_ref: str):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        expires_at = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute("""
+            UPDATE users 
+            SET is_premium = 1, 
+                premium_expires_at = ?, 
+                last_payment_ref = ?, 
+                last_payment_amount = ?
+            WHERE user_id = ?
+        """, (expires_at, mpesa_ref, amount, user_id))
         conn.commit()
         conn.close()

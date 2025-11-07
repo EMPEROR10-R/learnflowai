@@ -1,49 +1,51 @@
 # mpesa_auth.py
-import base64
-import toml
 import requests
-from pathlib import Path
+import base64
+from datetime import datetime
+import streamlit as st
 
-# ----------------------------------------------------------------------
-# Load credentials from TOML (keeps secrets out of code)
-# ----------------------------------------------------------------------
-CONFIG_PATH = Path(__file__).with_name("mpesa_config.toml")
-if not CONFIG_PATH.is_file():
-    raise FileNotFoundError(f"Missing {CONFIG_PATH}. Create it with your Daraja keys.")
-
-cfg = toml.load(CONFIG_PATH)
-KEY    = cfg["mpesa"]["daraja"]["consumer_key"]
-SECRET = cfg["mpesa"]["daraja"]["consumer_secret"]
-
-# ----------------------------------------------------------------------
-# Build Basic Auth header (once – reusable)
-# ----------------------------------------------------------------------
-def _basic_auth_header() -> str:
-    auth_str = f"{KEY}:{SECRET}"
-    b64 = base64.b64encode(auth_str.encode()).decode()
-    return f"Basic {b64}"
-
-# ----------------------------------------------------------------------
-# Get OAuth token (sandbox)
-# ----------------------------------------------------------------------
-def get_oauth_token() -> str:
+def get_oauth_token():
+    consumer_key = st.secrets["MPESA_CONSUMER_KEY"]
+    consumer_secret = st.secrets["MPESA_CONSUMER_SECRET"]
     url = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
-    headers = {"Authorization": _basic_auth_header()}
-
-    resp = requests.get(url, headers=headers, timeout=15)
-    resp.raise_for_status()               # will raise HTTPError on 4xx/5xx
-
-    token = resp.json()["access_token"]
-    expires_in = resp.json().get("expires_in", 3600)
-    print(f"[DARAJA] Token received – expires in {expires_in}s")
-    return token
-
-# ----------------------------------------------------------------------
-# Quick test when run directly
-# ----------------------------------------------------------------------
-if __name__ == "__main__":
     try:
-        token = get_oauth_token()
-        print("Bearer token:", token)
+        response = requests.get(url, auth=(consumer_key, consumer_secret))
+        response.raise_for_status()
+        return response.json()["access_token"]
     except Exception as e:
-        print("Failed to get token:", e)
+        raise ValueError(f"Failed to get OAuth token: {e}")
+
+def stk_push(phone: str, amount: int, account_ref: str = "LearnFlowAI", desc: str = "Premium Upgrade"):
+    token = get_oauth_token()
+    url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    shortcode = st.secrets.get("MPESA_SHORTCODE", "174379")
+    passkey = st.secrets["MPESA_PASSKEY"]
+    password_str = f"{shortcode}{passkey}{timestamp}"
+    password = base64.b64encode(password_str.encode()).decode("utf-8")
+
+    # REPLACE WITH YOUR NGROK/PUBLIC URL + /callback
+    callback_url = "https://your-ngrok-url.ngrok.io/callback"
+
+    payload = {
+        "BusinessShortCode": shortcode,
+        "Password": password,
+        "Timestamp": timestamp,
+        "TransactionType": "CustomerPayBillOnline",
+        "Amount": amount,
+        "PartyA": phone,
+        "PartyB": shortcode,
+        "PhoneNumber": phone,
+        "CallBackURL": callback_url,
+        "AccountReference": account_ref,
+        "TransactionDesc": desc
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        raise ValueError(f"STK Push failed: {e}")
