@@ -3,6 +3,7 @@ import requests
 import base64
 from datetime import datetime
 import streamlit as st
+import os
 
 def get_oauth_token():
     consumer_key = st.secrets["MPESA_CONSUMER_KEY"]
@@ -13,7 +14,7 @@ def get_oauth_token():
         response.raise_for_status()
         return response.json()["access_token"]
     except Exception as e:
-        raise ValueError(f"Failed to get OAuth token: {e}")
+        raise ValueError(f"OAuth failed: {e}")
 
 def stk_push(phone: str, amount: int, account_ref: str = "LearnFlowAI", desc: str = "Premium Upgrade"):
     token = get_oauth_token()
@@ -26,8 +27,9 @@ def stk_push(phone: str, amount: int, account_ref: str = "LearnFlowAI", desc: st
     password_str = f"{shortcode}{passkey}{timestamp}"
     password = base64.b64encode(password_str.encode()).decode("utf-8")
 
-    # REPLACE WITH YOUR NGROK/PUBLIC URL + /callback
-    callback_url = "https://your-ngrok-url.ngrok.io/callback"
+    # DYNAMIC CALLBACK URL
+    base_url = os.environ.get("STREAMLIT_PUBLIC_URL", f"https://{st.secrets['APP_NAME']}.streamlit.app")
+    callback_url = f"{base_url}/callback"
 
     payload = {
         "BusinessShortCode": shortcode,

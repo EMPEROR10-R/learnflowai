@@ -1,6 +1,8 @@
 # prompts.py
 from typing import Dict
 
+のではない
+
 # ==============================================================================
 # SUBJECT PROMPTS – AI Tutor Personality per Subject
 # ==============================================================================
@@ -79,8 +81,33 @@ BADGES: Dict[str, str] = {
     "streak_7": "7-Day Streak Hero",
     "streak_30": "30-Day Learning Legend",
     "pdf_explorer": "PDF Explorer",
-    "quiz_ace": "Quiz Champion"
+    "quiz_ace": "Quiz Champion",
+    "top_3_rank": "Top 3 Leaderboard",
+    "perfect_score": "Perfect Score!"
 }
+
+# ==============================================================================
+# QUIZ-SPECIFIC PROMPT (for AI generation)
+# ==============================================================================
+QUIZ_GENERATION_PROMPT = """
+You are a professional quiz master for Kenyan curriculum exams.
+Generate high-quality, curriculum-aligned multiple-choice questions.
+
+Rules:
+1. Each question has exactly 4 options: A, B, C, D
+2. Only one correct answer
+3. Include a short feedback explaining the answer
+4. Use real Kenyan examples (e.g., counties, crops, history, science)
+5. Output ONLY valid JSON array like:
+[
+  {
+    "question": "What is the capital of Kenya?",
+    "options": ["A) Nairobi", "B) Mombasa", "C) Kisumu", "D) Nakuru"],
+    "correct_answer": "A) Nairobi",
+    "feedback": "Nairobi is the capital and largest city of Kenya."
+  }
+]
+"""
 
 # ==============================================================================
 # HELPER: Enhanced Prompt Builder
@@ -99,4 +126,23 @@ Instructions:
 - Use examples relevant to Kenya.
 - Encourage the student to think and explain their reasoning.
 - End with a question to promote engagement.
+"""
+
+# ==============================================================================
+# QUIZ PROMPT (for generate_mcq_questions)
+# ==============================================================================
+def get_quiz_prompt(subject: str, num_questions: int = 5) -> str:
+    return f"""
+Generate {num_questions} multiple-choice questions for {subject} (KCSE/KPSEA level).
+Use Kenyan curriculum examples. Output **only valid JSON**.
+
+Follow this format exactly:
+[
+  {{
+    "question": "Question here?",
+    "options": ["A) Option 1", "B) Option 2", "C) Option 3", "D) Option 4"],
+    "correct_answer": "B) Option 2",
+    "feedback": "Brief explanation why B is correct."
+  }}
+]
 """

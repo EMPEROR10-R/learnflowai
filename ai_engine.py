@@ -26,7 +26,6 @@ class AIEngine:
     def __init__(self, gemini_key: str, hf_key: str = ""):
         self.gemini_key = gemini_key or ""
         self.hf_key = hf_key or ""  # Not used anymore, but kept for compatibility
-        # No HF headers needed
 
     # --------------------------------------------------------------------------
     # Low-level request with back-off + detailed logging
@@ -76,22 +75,26 @@ class AIEngine:
             text = ""
             for page in doc:
                 text += page.get_text("text") + "\n"
-            doc.close()
-            return text.strip() or "No text extracted from the PDF."
+            return text.strip()
         except Exception as e:
-            return f"PDF extraction error: {e}"
+            return f"Error extracting PDF: {e}"
 
     # --------------------------------------------------------------------------
-    # GEMINI – CHAT / Q&A (stable 2.5) – ROBUST + DEBUG
+    # GEMINI CHAT (NON-STREAMING)
     # --------------------------------------------------------------------------
-    def generate_response_gemini(self, contents: List[Dict], system_prompt: str,
-                                 use_grounding: bool = False) -> str:
+    def generate_response_gemini(self, contents: List[Dict], system_prompt: str, use_grounding: bool = False) -> str:
+        if not self.gemini_key:
+            return "AI is not configured. Contact admin."
+
         payload = {
             "contents": contents,
-            "systemInstruction": {"parts": [{"text": system_prompt}]},
             "generationConfig": {
+                "responseMimeType": "text/plain",
                 "maxOutputTokens": 4096,
                 "temperature": 0.7
+            },
+            "systemInstruction": {
+                "parts": [{"text": system_prompt}]
             },
             "safetySettings": [
                 {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
@@ -107,9 +110,6 @@ class AIEngine:
         try:
             r = self._api_call(url, payload)
             data = r.json()
-            print("=== GEMINI FULL RESPONSE ===")
-            print(json.dumps(data, indent=2))
-            print("==============================")
 
             candidate = data.get("candidates", [{}])[0]
             parts = candidate.get("content", {}).get("parts", [])
@@ -146,16 +146,92 @@ class AIEngine:
             yield chunk
 
     # --------------------------------------------------------------------------
+    # ENHANCED: MULTIPLE-CHOICE QUIZ GENERATION
+    # --------------------------------------------------------------------------
+    def generate_mcq_questions(self, subject: str, num_questions: int = 5) -> List[Dict]:
+        """
+        Generate MCQ questions using Gemini.
+        Returns list of dicts: question, options, correct_answer, feedback
+        """
+        prompt = f"""
+Generate {num_questions} multiple-choice questions for {subject} (KCSE level).
+Each question must have:
+- 1 clear question
+- 4 options (A, B, C, D) — exactly one correct
+- Correct answer (e.g., "B")
+- Brief feedback explaining why the correct answer is right and others wrong
+
+Use Kenyan curriculum examples. Output **only valid JSON** like this:
+[
+  {{
+    "question": "What is the capital of Kenya?",
+    "options": ["A) Nairobi", "B) Mombasa", "C) Kisumu", "D) Nakuru"],
+    "correct_answer": "A) Nairobi",
+    "feedback": "Nairobi is the capital and largest city of Kenya."
+  }}
+]
+"""
+        try:
+            response = self.generate_response(prompt, "You are a quiz generator. Output only JSON.")
+            # Clean and parse
+            json_str = response.strip()
+            if json_str.startswith("```json"):
+                json_str = json_str[7:-3]
+            elif json_str.startswith("```"):
+                json_str = json_str[3:-3]
+            questions = json.loads(json_str)
+            return questions[:num_questions]
+        except Exception as e:
+            print(f"MCQ generation failed: {e}")
+            # Fallback mock
+            return [
+                {
+                    "question": f"What is 2 + 2 in {subject}?",
+                    "options": ["A) 3", "B) 4", "C) 5", "D) 6"],
+                    "correct_answer": "B) 4",
+                    "feedback": "Basic arithmetic: 2 + 2 = 4."
+                }
+            ][:num_questions]
+
+    # --------------------------------------------------------------------------
+    # ENHANCED: GRADE MCQ
+    # --------------------------------------------------------------------------
+    def grade_mcq(self, questions: List[Dict], user_answers: Dict[int, str]) -> Dict:
+        """
+        Grade user answers.
+        Returns: correct count, total, percentage, detailed results
+        """
+        correct = 0
+        results = []
+
+        for i, q in enumerate(questions):
+            user_ans = user_answers.get(i, "")
+            correct_ans = q["correct_answer"]
+            is_correct = user_ans == correct_ans
+            if is_correct:
+                correct += 1
+            results.append({
+                "question": q["question"],
+                "user_answer": user_ans,
+                "correct_answer": correct_ans,
+                "is_correct": is_correct,
+                "feedback": q.get("feedback", "No feedback.")
+            })
+
+        percentage = (correct / len(questions)) * 100 if questions else 0
+
+        return {
+            "correct": correct,
+            "total": len(questions),
+            "percentage": round(percentage, 1),
+            "results": results
+        }
+
+    # --------------------------------------------------------------------------
     # EXAM / GRADING / SUMMARY (Optional – keep or remove)
     # --------------------------------------------------------------------------
     def generate_exam_questions(self, subject, exam_type, num_questions):
-        return [
-            {
-                "question": f"What is a core idea in {subject}?",
-                "options": ["A) …", "B) …", "C) …", "D) …"],
-                "correct_answer": "B) …",
-            }
-        ][:num_questions]
+        return self.generate_mcq_questions(subject, num_questions)
 
     def grade_short_answer(self, question, model_answer, user_answer):
         is_correct = len(user_answer) > 15
