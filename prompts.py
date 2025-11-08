@@ -1,7 +1,7 @@
 # prompts.py
 from typing import Dict
 
-のではない
+
 
 # ==============================================================================
 # SUBJECT PROMPTS – AI Tutor Personality per Subject
