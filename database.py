@@ -35,6 +35,15 @@ class Database:
             mpesa_code TEXT, status TEXT DEFAULT 'pending', requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             processed_at TIMESTAMP
         )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS quiz_scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT, subject TEXT, score INTEGER, total INTEGER, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS user_badges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT, badge_key TEXT, unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, badge_key)
+        )''')
         conn.commit()
         conn.close()
 
@@ -94,6 +103,7 @@ class Database:
 
     def reject_payment(self, payment_id: int):
         conn = self.get_conn()
+        c = conn.cursor()
         c.execute("UPDATE manual_payments SET status='rejected' WHERE id=?", (payment_id,))
         conn.commit()
         conn.close()
@@ -113,3 +123,40 @@ class Database:
         count = c.fetchone()[0]
         conn.close()
         return count * 500
+
+    # QUIZ & BADGES
+    def record_quiz_score(self, user_id: str, subject: str, score: int, total: int):
+        conn = self.get_conn()
+        c = conn.cursor()
+        c.execute("INSERT INTO quiz_scores (user_id, subject, score, total) VALUES (?, ?, ?, ?)",
+                  (user_id, subject, score, total))
+        conn.commit()
+        conn.close()
+
+    def get_leaderboard(self, limit: int = 10) -> List[Dict]:
+        conn = self.get_conn()
+        c = conn.cursor()
+        c.execute("""SELECT u.name, SUM(q.score) as total_score, COUNT(q.id) as quizzes
+                     FROM quiz_scores q JOIN users u ON q.user_id = u.user_id
+                     GROUP BY q.user_id ORDER BY total_score DESC LIMIT ?""", (limit,))
+        rows = c.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def unlock_badge(self, user_id: str, badge_key: str):
+        conn = self.get_conn()
+        c = conn.cursor()
+        try:
+            c.execute("INSERT INTO user_badges (user_id, badge_key) VALUES (?, ?)", (user_id, badge_key))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            pass  # Already unlocked
+        conn.close()
+
+    def get_user_badges(self, user_id: str) -> List[str]:
+        conn = self.get_conn()
+        c = conn.cursor()
+        c.execute("SELECT badge_key FROM user_badges WHERE user_id = ?", (user_id,))
+        rows = c.fetchall()
+        conn.close()
+        return [r["badge_key"] for r in rows]
