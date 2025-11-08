@@ -32,7 +32,6 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # Users table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
@@ -55,12 +54,11 @@ class Database:
                 failed_logins INTEGER DEFAULT 0,
                 lockout_until TIMESTAMP,
                 two_fa_secret TEXT,
-                parent_id TEXT,  -- Child links to parent
+                parent_id TEXT,
                 FOREIGN KEY (parent_id) REFERENCES users(user_id) ON DELETE SET NULL
             )
         """)
 
-        # Manual payments
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS manual_payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,7 +73,6 @@ class Database:
             )
         """)
 
-        # Activity log for parent view
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS activity_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +84,6 @@ class Database:
             )
         """)
 
-        # Quiz results
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS quiz_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,7 +125,6 @@ class Database:
         conn.commit()
         conn.close()
 
-    # ==================== 2FA ====================
     def generate_2fa_secret(self, user_id: str):
         secret = pyotp.random_base32()
         conn = self.get_connection()
@@ -150,7 +145,6 @@ class Database:
         user = self.get_user(user_id)
         return bool(user and user.get("two_fa_secret"))
 
-    # ==================== PARENT LINKING ====================
     def link_parent(self, child_id: str, parent_email: str, parent_password: str) -> str:
         parent = self.get_user_by_email(parent_email)
         if not parent or not bcrypt.checkpw(parent_password.encode(), parent["password_hash"].encode()):
@@ -170,7 +164,6 @@ class Database:
         conn.close()
         return [dict(r) for r in rows]
 
-    # ==================== ACTIVITY LOG ====================
     def log_activity(self, user_id: str, action: str, duration: int = 0):
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -194,7 +187,6 @@ class Database:
         conn.close()
         return [dict(r) for r in rows]
 
-    # ==================== OTHER METHODS (unchanged) ====================
     def get_user(self, user_id: str) -> Optional[Dict]:
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -225,7 +217,6 @@ class Database:
         expires = datetime.fromisoformat(user["premium_expires_at"]) if user["premium_expires_at"] else datetime.min
         return datetime.now() < expires
 
-    # Manual payments (unchanged)
     def add_manual_payment(self, user_id: str, phone: str, mpesa_code: str):
         conn = self.get_connection()
         cursor = conn.cursor()

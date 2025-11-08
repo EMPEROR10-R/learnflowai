@@ -11,3 +11,6 @@ pymupdf
 bcrypt
 gtts
 pandas
+pyotp
+qrcode[pil]
+pyjwt

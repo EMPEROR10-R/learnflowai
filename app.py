@@ -65,7 +65,7 @@ def login_user(email: str, password: str, totp_code: str = ""):
     st.session_state.update({
         "user_id": user["user_id"], "user_name": user.get("name", ""), "user_email": email,
         "is_admin": user["role"] == "admin", "logged_in": True,
-        "is_parent": bool(user.get("parent_id") is None and db.get_children(user["user_id"]))
+        "is_parent": bool(db.get_children(user["user_id"]))
     })
     db.update_user_activity(user["user_id"])
     db.log_activity(user["user_id"], "login")
@@ -100,7 +100,7 @@ def settings_tab():
             st.image(buf.getvalue(), caption="Scan with Authenticator")
             st.code(secret)
 
-    # Parent Link (for child)
+    # Parent Link
     if not st.session_state.is_parent and not st.session_state.is_admin:
         st.subheader("Link Parent")
         parent_email = st.text_input("Parent Email")
@@ -130,7 +130,7 @@ def parent_dashboard():
                 st.bar_chart(daily["duration_minutes"])
                 st.write("**Last 7 Days:**", daily)
             else:
-                st.write("No activity yet.")
+                st.write("No activity.")
 
             # Rankings
             st.write("**Quiz Rankings**")
@@ -157,7 +157,7 @@ def main():
         totp = st.text_input("2FA Code (if enabled)")
 
         if st.button("Login"):
-            success, msg, state = loginribusiness_user(email, password, totp)
+            success, msg, state = login_user(email, password, totp)
             st.write(msg)
             if success:
                 st.rerun()
