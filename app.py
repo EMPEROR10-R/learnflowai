@@ -61,7 +61,9 @@ def auth():
                 ok, msg = login_user(email.lower(), pwd, totp)
                 if ok:
                     st.success("Logged in!")
-                    # REMOVED time.sleep(1) to ensure immediate state persistence and reroute
+                    # --- FIX: FORCE PAGE CHANGE HERE ---
+                    st.session_state.page = "main"  # Set a specific state for main app
+                    # ----------------------------------
                     st.rerun()
                 else:
                     st.error(msg)
@@ -206,7 +208,6 @@ def show_chat_mode():
         with st.chat_message("user"): st.write(prompt)
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                # Use SUBJECT_PROMPTS[subject] as system prompt for personalized tutor
                 resp = ai.generate_response(prompt, SUBJECT_PROMPTS[subject])
             st.write(resp)
 
@@ -249,7 +250,7 @@ if st.session_state.page == "welcome":
     welcome()
 elif st.session_state.page == "auth":
     auth()
-elif st.session_state.get("logged_in"):
+elif st.session_state.get("logged_in") or st.session_state.get("page") == "main": # <-- MODIFIED
     main_app()
 else:
     st.session_state.page = "auth"
