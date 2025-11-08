@@ -7,8 +7,6 @@ from database import Database
 from ai_engine import AIEngine
 from prompts import SUBJECT_PROMPTS
 import threading
-
-from flask import Flask, request, jsonify
 import logging
 import jwt
 import bcrypt
