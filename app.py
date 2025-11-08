@@ -61,7 +61,7 @@ def auth():
                 ok, msg = login_user(email.lower(), pwd, totp)
                 if ok:
                     st.success("Logged in!")
-                    time.sleep(1)
+                    # REMOVED time.sleep(1) to ensure immediate state persistence and reroute
                     st.rerun()
                 else:
                     st.error(msg)
@@ -206,6 +206,7 @@ def show_chat_mode():
         with st.chat_message("user"): st.write(prompt)
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
+                # Use SUBJECT_PROMPTS[subject] as system prompt for personalized tutor
                 resp = ai.generate_response(prompt, SUBJECT_PROMPTS[subject])
             st.write(resp)
 
