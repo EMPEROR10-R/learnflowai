@@ -1,0 +1,32 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3" xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10" xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest">
+  <Identity Name="ngrok.ngrok" Version="3.24.0.0" Publisher="CN=933CF6B5-07F8-4D54-9831-0ADEF7F6CC73" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>ngrok</DisplayName>
+    <PublisherDisplayName>ngrok</PublisherDisplayName>
+    <Description>ngrok gets your application online in one line.</Description>
+    <Logo>images\ngrok_icon_24px.png</Logo>
+  </Properties>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+  </Dependencies>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+  <Applications>
+    <Application Id="ngrok" Executable="ngrok.exe" EntryPoint="Windows.FullTrustApplication" uap10:RuntimeBehavior="packagedClassicApp" uap10:TrustLevel="mediumIL">
+      <Extensions>
+        <uap3:Extension Category="windows.appExecutionAlias" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="ngrok.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+      <uap:VisualElements BackgroundColor="#140648" DisplayName="ngrok" Square150x150Logo="images\ngrok_icon_150px.png" Square44x44Logo="images\ngrok_icon_44px.png" Description="ngrok" />
+    </Application>
+  </Applications>
+  <mp:PhoneIdentity PhoneProductId="540ef611-aef3-40c6-b0f9-9b4b897aec0b" PhonePublisherId="87f3ddcb-bbe3-4653-bbac-86fcf6b19bb6" />
+</Package>
