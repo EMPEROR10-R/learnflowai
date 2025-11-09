@@ -1,4 +1,4 @@
-# app.py
+# app.py (debugged)
 import streamlit as st
 import time
 import bcrypt
@@ -16,118 +16,107 @@ from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
 
-# --------------------------------------------------------------
-# PAGE CONFIG – hide Streamlit branding completely
-# --------------------------------------------------------------
-st.set_page_config(
-    page_title="LearnFlow AI",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-    menu_items=None,
-)
-
-# HIDE Streamlit footer, header, menu, and the "Deployed on Streamlit" badge
-hide_streamlit_style = """
+# =============================================
+# 1. PAGE CONFIG & HIDE BRANDING
+# =============================================
+st.set_page_config(page_title="LearnFlow AI", layout="wide", menu_items=None)
+st.markdown("""
 <style>
-    /* Hide header / footer */
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
-
-    /* Hide the "Deployed on Streamlit" badge (bottom-right) */
+    #MainMenu, header, footer {visibility: hidden !important;}
     .stApp > div:last-child {display: none !important;}
-
-    /* Optional: make the whole app look cleaner */
     .block-container {padding-top: 2rem;}
 </style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# --------------------------------------------------------------
-# INIT
-# --------------------------------------------------------------
+# =============================================
+# 2. SAFE INIT
+# =============================================
 @st.cache_resource
-def get_db(): return Database()
+def get_db():
+    try:
+        return Database()
+    except Exception as e:
+        st.error("Database failed. Run `python fix_db.py` first.")
+        st.code(str(e))
+        st.stop()
 
 @st.cache_resource
 def get_ai():
     key = st.secrets.get("GEMINI_API_KEY", "")
     if not key:
-        st.error("GEMINI_API_KEY missing! Add it in Advanced Settings → Secrets (TOML format).")
-        st.info("Get your key: https://aistudio.google.com/app/apikey")
+        st.error("GEMINI_API_KEY missing!")
+        st.info("Add it in Streamlit Cloud → Settings → Secrets")
         st.stop()
-    return AIEngine(key)
+    try:
+        return AIEngine(key)
+    except Exception as e:
+        st.error("AI Engine failed.")
+        st.code(str(e))
+        st.stop()
 
 db = get_db()
 ai = get_ai()
 
-# --------------------------------------------------------------
-# SETTINGS (font / theme / language / 2FA)
-# --------------------------------------------------------------
+# =============================================
+# 3. APPLY SETTINGS
+# =============================================
 def apply_settings():
     font = st.session_state.get("font_size", 16)
     theme = st.session_state.get("theme", "light")
-    css = f"""
+    st.markdown(f"""
     <style>
     .stApp {{font-size:{font}px;}}
     .stApp {{background:{'#fff' if theme=='light' else '#1e1e1e'};color:{'#000' if theme=='light' else '#fff'};}}
     .stTextInput > div > div > input {{background:{'#f0f0f0' if theme=='light' else '#333'};color:{'#000' if theme=='light' else '#fff'};}}
     </style>
-    """
-    st.markdown(css, unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-# --------------------------------------------------------------
-# WELCOME PAGE
-# --------------------------------------------------------------
+# =============================================
+# 4. WELCOME PAGE
+# =============================================
 def welcome():
-    st.markdown(
-        """
-        <div style='text-align:center;padding:100px;'>
-            <h1 style='font-size:70px;background:-webkit-linear-gradient(#00d4b1,#00ffaa);
-                       -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-                       animation:glow 2s infinite alternate;'>
-                LearnFlow AI
-            </h1>
-            <p style='font-size:24px;color:#aaa;'>Kenya's #1 AI Tutor</p>
-            <br><br>
-            <button onclick="document.getElementById('go').click()"
-                    style='padding:16px 60px;font-size:22px;background:#00d4b1;color:black;
-                           border:none;border-radius:50px;cursor:pointer;'>
-                Continue
-            </button>
-        </div>
-        <style>@keyframes glow{from{text-shadow:0 0 20px #00d4b1}to{text-shadow:0 0 40px #00ffcc}}</style>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown("""
+    <div style='text-align:center;padding:100px;'>
+        <h1 style='font-size:70px;background:-webkit-linear-gradient(#00d4b1,#00ffaa);
+                   -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+                   animation:glow 2s infinite alternate;'>
+            LearnFlow AI
+        </h1>
+        <p style='font-size:24px;color:#aaa;'>Kenya's #1 AI Tutor</p>
+        <br><br>
+        <button onclick="document.getElementById('go').click()"
+                style='padding:16px 60px;font-size:22px;background:#00d4b1;color:black;
+                       border:none;border-radius:50px;cursor:pointer;'>
+            Continue
+        </button>
+    </div>
+    <style>@keyframes glow{from{text-shadow:0 0 20px #00d4b1}to{text-shadow:0 0 40px #00ffcc}}</style>
+    """, unsafe_allow_html=True)
     if st.button("Continue", key="go", use_container_width=True):
         st.session_state.page = "auth"
-        st.rerun()
+        st.experimental_rerun()
 
-# --------------------------------------------------------------
-# AUTH (Login / Sign-up)
-# --------------------------------------------------------------
+# =============================================
+# 5. AUTH PAGE
+# =============================================
 def auth():
     st.markdown("<h1 style='text-align:center;color:#00d4b1;'>Welcome Back!</h1>", unsafe_allow_html=True)
     login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
 
-    # ---------- LOGIN ----------
     with login_tab:
         with st.form("login_form"):
             email = st.text_input("Email")
             pwd = st.text_input("Password", type="password")
             totp = st.text_input("2FA Code (if enabled)")
-            login_btn = st.form_submit_button("Login")
-            if login_btn:
+            if st.form_submit_button("Login"):
                 ok, msg = login_user(email.lower(), pwd, totp)
                 if ok:
-                    st.success("Logged in! Redirecting…")
+                    st.success("Logged in!")
                     time.sleep(1)
-                    st.rerun()
+                    st.experimental_rerun()
                 else:
                     st.error(msg)
 
-    # ---------- SIGN-UP ----------
     with signup_tab:
         with st.form("signup_form"):
             name = st.text_input("Name")
@@ -142,9 +131,9 @@ def auth():
                     st.success("Account created! Please log in.")
                     st.balloons()
 
-# --------------------------------------------------------------
-# LOGIN LOGIC
-# --------------------------------------------------------------
+# =============================================
+# 6. LOGIN LOGIC
+# =============================================
 def login_user(email: str, password: str, totp_code: str = ""):
     user = db.get_user_by_email(email)
     if not user:
@@ -152,83 +141,67 @@ def login_user(email: str, password: str, totp_code: str = ""):
 
     stored = user["password_hash"]
     if isinstance(stored, str):
-        stored = stored.encode("utf-8")
+        stored = stored.encode()
     if not bcrypt.checkpw(password.encode(), stored):
         return False, "Wrong password"
 
-    # 2FA
     if user.get("two_fa_secret"):
         if not totp_code or not pyotp.TOTP(user["two_fa_secret"]).verify(totp_code):
             return False, "Invalid 2FA code"
 
-    # SUCCESS – set session state
-    st.session_state.update(
-        {
-            "logged_in": True,
-            "user_id": user["user_id"],
-            "user_name": user.get("name", "Student"),
-            "user_email": email,
-            "is_admin": user["role"] == "admin",
-            "is_premium": bool(user["is_premium"]),
-        }
-    )
+    st.session_state.update({
+        "logged_in": True,
+        "user_id": user["user_id"],
+        "user_name": user.get("name", "Student"),
+        "user_email": email,
+        "is_admin": user["role"] == "admin",
+        "is_premium": bool(user.get("is_premium")),
+    })
     try:
         db.log_activity(user["user_id"], "login")
     except:
         pass
     return True, ""
 
-# --------------------------------------------------------------
-# ADMIN CONTROL CENTER (full page)
-# --------------------------------------------------------------
+# =============================================
+# 7. ADMIN CONTROL CENTER
+# =============================================
 def admin_control_center():
     st.markdown("# ADMIN CONTROL CENTER")
     st.success("Welcome KingMumo!")
 
     t1, t2, t3, t4 = st.tabs(["Pending Payments", "All Users", "Revenue", "Leaderboard & Badges"])
 
-    # ---- Pending Payments (show M-Pesa code + phone) ----
     with t1:
         payments = db.get_pending_payments()
         if not payments:
             st.info("No pending payments")
         else:
             for p in payments:
-                with st.expander(f"{p['name']} – {p['phone']} – KSh 500"):
-                    st.write(f"**M-Pesa Code:** `{p['mpesa_code']}`")
-                    st.write(f"**Phone:** {p['phone']}")
+                with st.expander(f"{p.get('name','Unknown')} – {p.get('phone','-')} – KSh 500"):
+                    st.write(f"**M-Pesa Code:** `{p.get('mpesa_code','-')}`")
+                    st.write(f"**Phone:** {p.get('phone','-')}")
                     c1, c2 = st.columns(2)
                     if c1.button("APPROVE", key=f"app_{p['id']}"):
                         db.approve_payment(p["id"])
                         st.success("Premium activated!")
-                        st.rerun()
+                        st.experimental_rerun()
                     if c2.button("Reject", key=f"rej_{p['id']}"):
                         db.reject_payment(p["id"])
                         st.error("Rejected")
-                        st.rerun()
+                        st.experimental_rerun()
 
-    # ---- All Users ----
     with t2:
         users = db.get_all_users()
-        st.dataframe(
-            [
-                {
-                    "Name": u["name"],
-                    "Email": u["email"],
-                    "Role": u["role"],
-                    "Premium": "Yes" if u["is_premium"] else "No",
-                }
-                for u in users
-            ],
-            use_container_width=True,
-        )
+        st.dataframe([
+            {"Name": u["name"], "Email": u["email"], "Role": u["role"], "Premium": "Yes" if u["is_premium"] else "No"}
+            for u in users
+        ], use_container_width=True)
 
-    # ---- Revenue ----
     with t3:
         total = db.get_revenue()
         st.metric("Total Revenue", f"KSh {total}")
 
-    # ---- Leaderboard + Badges ----
     with t4:
         st.markdown("### Leaderboard")
         board = db.get_leaderboard(20)
@@ -241,161 +214,158 @@ def admin_control_center():
             if ub:
                 st.write(f"**{u['name']}**: {', '.join([BADGES.get(b,b) for b in ub])}")
 
-# --------------------------------------------------------------
-# SETTINGS PAGE
-# --------------------------------------------------------------
+# =============================================
+# 8. SETTINGS PAGE (2FA + Theme)
+# =============================================
 def settings_page():
     st.title("Settings")
     with st.form("settings_form"):
-        st.session_state.font_size = st.slider(
-            "Font Size", 12, 24, st.session_state.get("font_size", 16)
-        )
-        st.session_state.theme = st.selectbox(
-            "Theme", ["light", "dark"],
-            index=0 if st.session_state.get("theme", "light") == "light" else 1,
-        )
-        st.session_state.lang = st.selectbox(
-            "Language", ["English", "Kiswahili"], index=0
-        )
+        st.session_state.font_size = st.slider("Font Size", 12, 24, st.session_state.get("font_size", 16))
+        st.session_state.theme = st.selectbox("Theme", ["light", "dark"], index=0 if st.session_state.get("theme", "light") == "light" else 1)
+        st.session_state.lang = st.selectbox("Language", ["English", "Kiswahili"], index=0)
 
-        # ---- 2FA ----
-        user = db.get_user_by_email(st.session_state.user_email)
-        has_2fa = bool(user.get("two_fa_secret"))
+        # Fetch fresh user details
+        user = db.get_user_by_email(st.session_state.user_email) if st.session_state.get("user_email") else {}
+        has_2fa = bool(user.get("two_fa_secret")) if user else False
         enable_2fa = st.checkbox("Enable 2-Factor Authentication", value=has_2fa)
 
         qr_img = None
         if enable_2fa and not has_2fa:
             secret = pyotp.random_base32()
-            uri = pyotp.totp.TOTP(secret).provisioning_uri(
-                name=st.session_state.user_email, issuer_name="LearnFlow AI"
-            )
+            uri = pyotp.totp.TOTP(secret).provisioning_uri(name=st.session_state.user_email, issuer_name="LearnFlow AI")
             qr = qrcode.make(uri)
             buf = BytesIO()
             qr.save(buf, format="PNG")
+            buf.seek(0)
             qr_img = buf.getvalue()
             st.session_state._new_2fa_secret = secret
 
         if qr_img:
-            st.image(qr_img, caption="Scan with Authenticator")
-            st.info("Click **Save Settings** after scanning.")
+            st.image(qr_img, caption="Scan with Authenticator App")
+            st.info("Click **Save Settings** to activate 2FA.")
 
         if st.form_submit_button("Save Settings"):
-            # 2FA handling
+            # Persist settings
             if enable_2fa and not has_2fa:
-                db.enable_2fa(st.session_state.user_id, st.session_state._new_2fa_secret)
-                del st.session_state._new_2fa_secret
+                # save secret directly using db connection
+                conn = db.get_conn()
+                c = conn.cursor()
+                c.execute("UPDATE users SET two_fa_secret = ? WHERE user_id = ?", (st.session_state._new_2fa_secret, st.session_state.user_id))
+                conn.commit()
+                conn.close()
+                st.session_state.pop("_new_2fa_secret", None)
             elif not enable_2fa and has_2fa:
-                db.disable_2fa(st.session_state.user_id)
-
+                conn = db.get_conn()
+                c = conn.cursor()
+                c.execute("UPDATE users SET two_fa_secret = NULL WHERE user_id = ?", (st.session_state.user_id,))
+                conn.commit()
+                conn.close()
             st.success("Settings saved!")
             time.sleep(1)
-            st.rerun()
+            st.experimental_rerun()
 
-# --------------------------------------------------------------
-# MAIN APP (Dashboard + Admin extras)
-# --------------------------------------------------------------
+# =============================================
+# 9. MAIN APP (Dashboard)
+# =============================================
+def safe_clear_session():
+    # safely clear session_state keys
+    for k in list(st.session_state.keys()):
+        try:
+            del st.session_state[k]
+        except Exception:
+            pass
+
 def main_app():
     apply_settings()
 
-    # ---- Sidebar ----
-    st.sidebar.success(f"Welcome {st.session_state.user_name}!")
+    # Sidebar
+    st.sidebar.success(f"Welcome {st.session_state.get('user_name','User')}!")
 
     if st.sidebar.button("My Account"):
         st.session_state.page = "dashboard"
     if st.sidebar.button("Settings"):
         st.session_state.page = "settings"
     if st.sidebar.button("Logout"):
-        st.session_state.clear()
-        st.rerun()
+        safe_clear_session()
+        st.session_state.page = "auth"
+        st.experimental_rerun()
 
-    if st.session_state.is_admin:
+    # Admin-only Control Center button (visible only to admin)
+    if st.session_state.get("is_admin"):
         if st.sidebar.button("Control Center"):
             st.session_state.page = "admin_center"
 
-    # ---- Page routing ----
+    # Routing
     if st.session_state.get("page") == "admin_center":
-        admin_control_center()
+        # only admin can access
+        if st.session_state.get("is_admin"):
+            admin_control_center()
+        else:
+            st.warning("Access denied.")
+            st.session_state.page = "dashboard"
+            st.experimental_rerun()
         return
+
     if st.session_state.get("page") == "settings":
         settings_page()
         return
 
-    # ---- Default Dashboard ----
+    # Dashboard
     st.title("My Dashboard")
-    if st.session_state.is_admin:
-        st.success("**Unlimited AI access** – no monthly limits.")
-    elif st.session_state.is_premium:
-        st.info("Premium – higher quotas.")
+    if st.session_state.get("is_admin"):
+        st.success("**Unlimited AI Access** – No Limits")
+    elif st.session_state.get("is_premium"):
+        st.info("Premium User – Higher Quotas")
     else:
         st.warning("Upgrade to Premium!")
 
-    # Leaderboard (top 5) + own badges
-    st.markdown("### Leaderboard")
+    # Leaderboard
+    st.markdown("### Leaderboard (Top 5)")
     board = db.get_leaderboard(5)
     for i, e in enumerate(board):
         st.write(f"**#{i+1}** {e['name']} — {e['total_score']} pts")
 
+    # Badges
     my_badges = db.get_user_badges(st.session_state.user_id)
     if my_badges:
         st.markdown("### My Badges")
         st.write(", ".join([BADGES.get(b, b) for b in my_badges]))
 
-    # === CSV DATA ANALYSIS ===
+    # CSV Upload + AI Analysis
     st.markdown("### Upload CSV for AI Analysis")
-    csv_file = st.file_uploader("Upload CSV", type="csv")
+    csv_file = st.file_uploader("Choose CSV file", type="csv")
+    query = None
+    resp = ""
     if csv_file:
         df = pd.read_csv(csv_file)
-        st.write("**Data Preview**")
+        st.write("**Preview**")
         st.dataframe(df.head())
-
-        # Stats
-        st.write("**Summary Statistics**")
+        st.write("**Stats**")
         st.dataframe(df.describe())
 
-        # Charts
-        col1, col2 = st.columns(2)
-        with col1:
-            numeric_cols = df.select_dtypes(include='number').columns
-            if len(numeric_cols) > 0:
-                chart_col = st.selectbox("Select column for chart", numeric_cols)
-                fig, ax = plt.subplots()
-                df[chart_col].hist(ax=ax, bins=20, color='#00d4b1')
-                ax.set_title(f"Distribution of {chart_col}")
-                st.pyplot(fig)
+        numeric_cols = df.select_dtypes(include='number').columns
+        if len(numeric_cols) > 0:
+            col = st.selectbox("Select column for chart", numeric_cols)
+            fig, ax = plt.subplots()
+            df[col].hist(ax=ax, bins=20)
+            ax.set_title(f"Distribution of {col}")
+            st.pyplot(fig)
 
-        # AI Insights
         csv_text = df.to_csv(index=False)
-        insight_query = st.text_input("Ask AI about this data:")
-        if insight_query:
-            with st.spinner("Analyzing data..."):
-                prompt = f"CSV Data:\n{csv_text}\n\nQuestion: {insight_query}\nProvide insights, trends, and recommendations."
+        query = st.text_input("Ask AI about this data:")
+        if query:
+            with st.spinner("Analyzing..."):
+                prompt = f"CSV Data:\n{csv_text}\n\nQuestion: {query}\nProvide insights."
                 resp = ai.generate_response(prompt, "You are a data analyst.")
             st.write("**AI Insights**")
             st.write(resp)
 
-        # === Export CSV Analysis as PDF ===
-        if st.button("Export CSV Analysis to PDF"):
-            pdf_buffer = generate_csv_pdf(df, insight_query, resp if 'resp' in locals() else "")
-            st.download_button(
-                "Download PDF Report",
-                data=pdf_buffer,
-                file_name="csv_analysis_report.pdf",
-                mime="application/pdf"
-            )
+        if st.button("Export CSV Report to PDF"):
+            pdf_buffer = generate_csv_pdf(df, query, resp if resp else "")
+            # pdf_buffer is BytesIO with pointer at 0
+            st.download_button("Download PDF", data=pdf_buffer.getvalue(), file_name="csv_analysis.pdf", mime="application/pdf")
 
-    # === PDF UPLOAD (Existing) ===
-    uploaded_pdf = st.file_uploader("Upload PDF for AI Analysis", type="pdf", key="pdf")
-    if uploaded_pdf:
-        pdf_bytes = uploaded_pdf.read()
-        with st.spinner("Extracting text..."):
-            pdf_text = ai.extract_text_from_pdf(pdf_bytes)
-        st.text_area("PDF Text", pdf_text, height=200)
-        pdf_query = st.text_input("Ask about PDF:")
-        if pdf_query:
-            resp = ai.generate_response(f"Context: {pdf_text}\nQuery: {pdf_query}", "PDF Analyst")
-            st.write(resp)
-
-    # === SUBJECT + CHAT/QUIZ ===
+    # Subject + Mode
     subject = st.sidebar.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
     mode = st.sidebar.radio("Mode", ["Chat", "Quiz"], horizontal=True)
     if mode == "Quiz":
@@ -403,61 +373,87 @@ def main_app():
     else:
         show_chat_mode(subject)
 
-# --------------------------------------------------------------
-# CUSTOM PDF GENERATOR (CSV + Quiz)
-# --------------------------------------------------------------
-def generate_csv_pdf(df, question, ai_insight):
+# =============================================
+# 10. PDF GENERATORS
+# =============================================
+def generate_csv_pdf(df, question, insight):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
     elements = []
 
-    # Header
-    elements.append(Paragraph("LearnFlow AI - CSV Data Analysis Report", styles['Title']))
+    elements.append(Paragraph("LearnFlow AI - CSV Analysis Report", styles['Title']))
     elements.append(Spacer(1, 0.2*inch))
-    elements.append(Paragraph(f"Generated: {time.strftime('%Y-%m-%d %H:%M')}", styles['Normal']))
-    elements.append(Paragraph(f"User: {st.session_state.user_name}", styles['Normal']))
+    elements.append(Paragraph(f"User: {st.session_state.get('user_name','-')}", styles['Normal']))
+    elements.append(Paragraph(f"Date: {time.strftime('%Y-%m-%d %H:%M')}", styles['Normal']))
     elements.append(Spacer(1, 0.3*inch))
 
-    # Question
     if question:
         elements.append(Paragraph(f"<b>Question:</b> {question}", styles['Normal']))
-        elements.append(Spacer(1, 0.2*inch))
-
-    # AI Insight
-    if ai_insight:
+    if insight:
         elements.append(Paragraph("<b>AI Insights:</b>", styles['Normal']))
-        for line in ai_insight.split('\n'):
+        for line in insight.split('\n'):
             elements.append(Paragraph(line, styles['Normal']))
         elements.append(Spacer(1, 0.3*inch))
 
-    # Data Table
-    data = [df.columns.tolist()] + df.values.tolist()
-    table = Table(data)
+    # Limit the table size in the PDF to avoid huge documents
+    max_rows = 100
+    trimmed = df.head(max_rows)
+    data = [trimmed.columns.tolist()] + trimmed.values.tolist()
+    table = Table(data, repeatRows=1)
     table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#00d4b1')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#00d4b1')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.25, colors.black),
+        ('FONTSIZE', (0,0), (-1,-1), 8),
     ]))
     elements.append(table)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+def generate_quiz_pdf(result, subject):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    elements.append(Paragraph("LearnFlow AI - Quiz Report", styles['Title']))
+    elements.append(Paragraph(f"Subject: {subject}", styles['Normal']))
+    elements.append(Paragraph(f"Score: {result['correct']}/{result['total']} ({result['percentage']}%)", styles['Normal']))
+    elements.append(Paragraph(f"Date: {time.strftime('%Y-%m-%d %H:%M')}", styles['Normal']))
+    elements.append(Spacer(1, 0.3*inch))
+
+    for r in result["results"]:
+        elements.append(Paragraph(f"<b>Q:</b> {r['question']}", styles['Normal']))
+        elements.append(Paragraph(f"Your: {r['user_answer']} | Correct: {r['correct_answer']}", styles['Normal']))
+        if not r["is_correct"]:
+            elements.append(Paragraph(f"Feedback: {r.get('feedback','')}", styles['Italic']))
+        elements.append(Spacer(1, 0.2*inch))
 
     doc.build(elements)
     buffer.seek(0)
     return buffer
 
-# --------------------------------------------------------------
-# QUIZ MODE (with PDF export)
-# --------------------------------------------------------------
+# =============================================
+# 11. QUIZ & CHAT
+# =============================================
+def show_chat_mode(subject):
+    st.header(subject)
+    prompt = st.chat_input("Ask me anything...")
+    if prompt:
+        with st.chat_message("user"): st.write(prompt)
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                resp = ai.generate_response(f"{SUBJECT_PROMPTS[subject]}\nStudent: {prompt}", SUBJECT_PROMPTS[subject])
+            st.write(resp)
+
 def show_quiz_mode(subject):
     st.header(f"Quiz – {subject}")
     if st.button("Start 5-Question Quiz"):
         qs = ai.generate_mcq_questions(subject, 5)
         st.session_state.quiz = {"questions": qs, "answers": {}, "start": time.time()}
-        st.rerun()
+        st.experimental_rerun()
 
     if "quiz" in st.session_state:
         q = st.session_state.quiz
@@ -479,58 +475,16 @@ def show_quiz_mode(subject):
                 st.write(f"Your: {r['user_answer']} | Correct: {r['correct_answer']}")
                 if not r["is_correct"]: st.info(r["feedback"])
 
-            # === Export Quiz PDF ===
-            if st.button("Export Quiz Report"):
+            if st.button("Export Quiz Report to PDF"):
                 pdf_buffer = generate_quiz_pdf(res, subject)
-                st.download_button(
-                    "Download Quiz PDF",
-                    data=pdf_buffer,
-                    file_name=f"quiz_{subject}.pdf",
-                    mime="application/pdf"
-                )
+                st.download_button("Download PDF", data=pdf_buffer.getvalue(), file_name=f"quiz_{subject}.pdf", mime="application/pdf")
 
             del st.session_state.quiz
-            st.rerun()
+            st.experimental_rerun()
 
-def generate_quiz_pdf(result, subject):
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-    elements = []
-
-    elements.append(Paragraph("LearnFlow AI - Quiz Report", styles['Title']))
-    elements.append(Paragraph(f"Subject: {subject}", styles['Normal']))
-    elements.append(Paragraph(f"Score: {result['correct']}/{result['total']} ({result['percentage']}%)", styles['Normal']))
-    elements.append(Paragraph(f"Date: {time.strftime('%Y-%m-%d %H:%M')}", styles['Normal']))
-    elements.append(Spacer(1, 0.3*inch))
-
-    for r in result["results"]:
-        elements.append(Paragraph(f"<b>Q:</b> {r['question']}", styles['Normal']))
-        elements.append(Paragraph(f"Your: {r['user_answer']} | Correct: {r['correct_answer']}", styles['Normal']))
-        if not r["is_correct"]:
-            elements.append(Paragraph(f"Feedback: {r['feedback']}", styles['Italic']))
-        elements.append(Spacer(1, 0.2*inch))
-
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
-
-# --------------------------------------------------------------
-# CHAT MODE
-# --------------------------------------------------------------
-def show_chat_mode(subject):
-    st.header(subject)
-    prompt = st.chat_input("Ask me anything…")
-    if prompt:
-        with st.chat_message("user"): st.write(prompt)
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking…"):
-                resp = ai.generate_response(f"{SUBJECT_PROMPTS[subject]}\nStudent: {prompt}", SUBJECT_PROMPTS[subject])
-            st.write(resp)
-
-# --------------------------------------------------------------
-# ROUTER
-# --------------------------------------------------------------
+# =============================================
+# 12. ROUTER
+# =============================================
 if "page" not in st.session_state:
     st.session_state.page = "welcome"
 
@@ -542,4 +496,4 @@ elif st.session_state.get("logged_in"):
     main_app()
 else:
     st.session_state.page = "auth"
-    st.rerun()
+    st.experimental_rerun()
