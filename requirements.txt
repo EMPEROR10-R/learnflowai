@@ -14,3 +14,4 @@ pandas
 pyotp
 qrcode[pil]
 pyjwt
+reportlab
