@@ -18,11 +18,26 @@ def get_db(): return Database()
 @st.cache_resource
 def get_ai():
     key = st.secrets.get("GEMINI_API_KEY", "")
-    if not key: st.error("Add GEMINI_API_KEY to secrets"); st.stop()
+    if not key: st.error("Add GEMINI_API_KEY"); st.stop()
     return AIEngine(key)
 
 db = get_db()
 ai = get_ai()
+
+# SETTINGS (Shared)
+def apply_settings():
+    font_size = st.session_state.get("font_size", 16)
+    theme = st.session_state.get("theme", "light")
+    lang = st.session_state.get("lang", "en")
+
+    css = f"""
+    <style>
+    .stApp {{ font-size: {font_size}px; }}
+    .stApp {{ background: {'#fff' if theme == 'light' else '#1e1e1e'}; color: {'#000' if theme == 'light' else '#fff'}; }}
+    .stTextInput > div > div > input {{ background: {'#f0f0f0' if theme == 'light' else '#333'}; color: {'#000' if theme == 'light' else '#fff'}; }}
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
 
 # WELCOME
 def welcome():
@@ -61,9 +76,7 @@ def auth():
                 ok, msg = login_user(email.lower(), pwd, totp)
                 if ok:
                     st.success("Logged in!")
-                    # --- FIX: FORCE PAGE CHANGE HERE ---
-                    st.session_state.page = "main"  # Set a specific state for main app
-                    # ----------------------------------
+                    time.sleep(1)
                     st.rerun()
                 else:
                     st.error(msg)
@@ -74,7 +87,7 @@ def auth():
             email = st.text_input("Email")
             pwd = st.text_input("Password", type="password")
             phone = st.text_input("Phone")
-            if st.form_submit_button("Create Account"):  # FIXED
+            if st.form_submit_button("Create Account"):
                 if db.get_user_by_email(email.lower()):
                     st.error("Email exists")
                 else:
@@ -102,21 +115,21 @@ def login_user(email: str, password: str, totp_code: str = ""):
         "user_id": user["user_id"],
         "user_name": user.get("name", "Student"),
         "user_email": email,
-        "is_admin": user["role"] == "admin",
-        "mode": "chat"
+        "is_admin": user["role"] == "admin"
     })
 
     try:
         db.log_activity(user["user_id"], "login")
     except: pass
+
     return True, ""
 
-# ADMIN PANEL
-def admin_panel():
-    st.title("ADMIN CONTROL CENTER")
+# ADMIN CONTROL CENTER PAGE
+def admin_control_center():
+    st.markdown("# ADMIN CONTROL CENTER")
     st.success("Welcome KingMumo!")
 
-    tab1, tab2, tab3 = st.tabs(["Pending Payments", "All Users", "Revenue"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Pending Payments", "All Users", "Revenue", "Leaderboard & Badges"])
 
     with tab1:
         payments = db.get_pending_payments()
@@ -127,11 +140,11 @@ def admin_panel():
                 with st.expander(f"{p['name']} - {p['phone']} - KSh 500"):
                     st.write(f"M-Pesa Code: `{p['mpesa_code']}`")
                     col1, col2 = st.columns(2)
-                    if col1.button("APPROVE", key=p['id']):
+                    if col1.button("APPROVE", key=f"app_{p['id']}"):
                         db.approve_payment(p['id'])
                         st.success("Premium activated!")
                         st.rerun()
-                    if col2.button("Reject", key=f"r{p['id']}"):
+                    if col2.button("Reject", key=f"rej_{p['id']}"):
                         db.reject_payment(p['id'])
                         st.error("Rejected")
                         st.rerun()
@@ -146,101 +159,127 @@ def admin_panel():
     with tab3:
         total = db.get_revenue()
         st.metric("Total Revenue", f"KSh {total}")
+        st.bar_chart({"Jan": 500, "Feb": 1000, "Mar": 1500})  # Replace with real data
 
-# QUIZ MODE
-def show_quiz_mode():
-    st.title("Quiz Mode")
-    subject = st.selectbox("Choose Subject", list(SUBJECT_PROMPTS.keys()))
-    
-    if st.button("Start 5-Question Quiz"):
-        with st.spinner("Generating quiz..."):
-            questions = ai.generate_mcq_questions(subject, 5)
-        st.session_state.quiz = {
-            "questions": questions,
-            "answers": {},
-            "subject": subject,
-            "start_time": time.time()
-        }
-        st.rerun()
+    with tab4:
+        st.markdown("### Leaderboard (Quiz Scores)")
+        board = db.get_leaderboard(20)
+        for i, entry in enumerate(board):
+            st.write(f"**#{i+1}** {entry['name']} — {entry['total_score']} pts ({entry['quizzes']} quizzes)")
 
-    if "quiz" in st.session_state:
-        q = st.session_state.quiz
-        for i, ques in enumerate(q["questions"]):
-            with st.container():
-                st.markdown(f"**Q{i+1}:** {ques['question']}")
-                ans = st.radio("Choose answer", ques["options"], key=f"ans_{i}")
-                q["answers"][i] = ans
+        st.markdown("### User Badges")
+        users = db.get_all_users()
+        for u in users:
+            user_badges = db.get_user_badges(u["user_id"])
+            if user_badges:
+                badge_str = ", ".join([BADGES.get(b, b) for b in user_badges])
+                st.write(f"**{u['name']}**: {badge_str}")
 
-        if st.button("Submit Quiz", type="primary"):
-            result = ai.grade_mcq(q["questions"], q["answers"])
-            total_time = int(time.time() - q["start_time"])
-            avg_time = total_time // len(q["questions"]) if result["total"] > 0 else 0
-
-            # Save score
-            db.record_quiz_score(st.session_state.user_id, q["subject"], result["correct"], result["total"])
-
-            # Unlock badges
-            if result["correct"] == result["total"]:
-                db.unlock_badge(st.session_state.user_id, "perfect_score")
-            if result["total"] >= 5:
-                db.unlock_badge(st.session_state.user_id, "first_quiz")
-            if avg_time < 60:
-                db.unlock_badge(st.session_state.user_id, "speed_demon")
-
-            # Show results
-            st.success(f"Score: {result['correct']}/{result['total']} ({result['percentage']}%) | Time: {total_time}s")
-            for r in result["results"]:
-                color = "green" if r["is_correct"] else "red"
-                st.markdown(f"**Q:** {r['question']}")
-                st.markdown(f"<span style='color:{color}'>Your: {r['user_answer']} | Correct: {r['correct_answer']}</span>", unsafe_allow_html=True)
-                if not r["is_correct"]:
-                    st.info(r["feedback"])
-
-            del st.session_state.quiz
+# SETTINGS PAGE
+def settings_page():
+    st.title("Settings")
+    with st.form("settings"):
+        st.session_state.font_size = st.slider("Font Size", 12, 24, st.session_state.get("font_size", 16))
+        st.session_state.theme = st.selectbox("Theme", ["light", "dark"], index=0 if st.session_state.get("theme", "light") == "light" else 1)
+        st.session_state.lang = st.selectbox("Language", ["English", "Kiswahili"], index=0 if st.session_state.get("lang", "en") == "en" else 1)
+        if st.form_submit_button("Save Settings"):
+            st.success("Settings saved!")
+            time.sleep(1)
             st.rerun()
 
-# CHAT MODE
-def show_chat_mode():
-    st.title("AI Tutor")
-    subject = st.sidebar.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
+# MAIN APP
+def main_app():
+    apply_settings()
+
+    if st.session_state.is_admin:
+        st.sidebar.success(f"Welcome {st.session_state.user_name}!")
+        if st.sidebar.button("Control Center"):
+            st.session_state.page = "admin_center"
+            st.rerun()
+        if st.sidebar.button("Settings"):
+            st.session_state.page = "settings"
+            st.rerun()
+        if st.sidebar.button("Logout"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+        if st.session_state.get("page") == "admin_center":
+            admin_control_center()
+        elif st.session_state.get("page") == "settings":
+            settings_page()
+        else:
+            st.title("Admin Dashboard")
+            st.info("Use the sidebar to access **Control Center** or **Settings**.")
+            st.markdown("### Unlimited AI Access")
+            st.success("As Admin, you have **unlimited usage** — no monthly limits.")
+            show_chat_mode("General")
+
+    else:
+        st.sidebar.success(f"Welcome {st.session_state.user_name}!")
+        if st.sidebar.button("Settings"):
+            st.session_state.page = "settings"
+            st.rerun()
+        if st.sidebar.button("Logout"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+        if st.session_state.get("page") == "settings":
+            settings_page()
+        else:
+            subject = st.sidebar.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
+            if st.sidebar.button("Take Quiz"):
+                st.session_state.mode = "quiz"
+            else:
+                st.session_state.mode = "chat"
+
+            if st.session_state.mode == "quiz":
+                show_quiz_mode(subject)
+            else:
+                show_chat_mode(subject)
+
+# QUIZ & CHAT MODES
+def show_chat_mode(subject):
+    st.title(subject)
     prompt = st.chat_input("Ask me anything...")
     if prompt:
         with st.chat_message("user"): st.write(prompt)
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                resp = ai.generate_response(prompt, SUBJECT_PROMPTS[subject])
+                resp = ai.generate_response(f"{SUBJECT_PROMPTS[subject]}\nStudent: {prompt}", SUBJECT_PROMPTS[subject])
             st.write(resp)
 
-# MAIN APP
-def main_app():
-    if st.session_state.is_admin:
-        admin_panel()
-    else:
-        # Sidebar
-        st.sidebar.success(f"Welcome {st.session_state.user_name}!")
+def show_quiz_mode(subject):
+    st.title(f"Quiz: {subject}")
+    if st.button("Start 5-Question Quiz"):
+        questions = ai.generate_mcq_questions(subject, 5)
+        st.session_state.quiz = {"questions": questions, "answers": {}, "start": time.time()}
+        st.rerun()
 
-        mode = st.sidebar.radio("Mode", ["Chat", "Quiz"], horizontal=True)
-        st.session_state.mode = "chat" if mode == "Chat" else "quiz"
+    if "quiz" in st.session_state:
+        q = st.session_state.quiz
+        for i, ques in enumerate(q["questions"]):
+            with st.expander(f"Q{i+1}: {ques['question']}"):
+                ans = st.radio("Select", ques["options"], key=f"q{i}")
+                q["answers"][i] = ans
 
-        # Leaderboard
-        st.sidebar.markdown("### Leaderboard")
-        board = db.get_leaderboard(5)
-        for i, entry in enumerate(board):
-            medal = "gold" if i == 0 else "silver" if i == 1 else "bronze" if i == 2 else ""
-            st.sidebar.markdown(f"**#{i+1}** {entry['name']} — {entry['total_score']} pts")
+        if st.button("Submit Quiz"):
+            result = ai.grade_mcq(q["questions"], q["answers"])
+            db.record_quiz_score(st.session_state.user_id, subject, result["correct"], result["total"])
+            
+            db.unlock_badge(st.session_state.user_id, "first_quiz")
+            if result["percentage"] == 100:
+                db.unlock_badge(st.session_state.user_id, "perfect_score")
 
-        # Badges
-        user_badges = db.get_user_badges(st.session_state.user_id)
-        if user_badges:
-            st.sidebar.markdown("### Your Badges")
-            for b in user_badges:
-                st.sidebar.markdown(f"`{BADGES.get(b, b)}`")
+            st.success(f"Score: {result['correct']}/{result['total']} ({result['percentage']}%)")
+            for r in result["results"]:
+                st.write(f"**Q:** {r['question']}")
+                st.write(f"Your: {r['user_answer']} | Correct: {r['correct_answer']}")
+                if not r["is_correct"]: st.info(r["feedback"])
 
-        # Mode Switch
-        if st.session_state.mode == "quiz":
-            show_quiz_mode()
-        else:
-            show_chat_mode()
+            del st.session_state.quiz
+            st.rerun()
 
 # ROUTER
 if "page" not in st.session_state:
@@ -250,7 +289,7 @@ if st.session_state.page == "welcome":
     welcome()
 elif st.session_state.page == "auth":
     auth()
-elif st.session_state.get("logged_in") or st.session_state.get("page") == "main": # <-- MODIFIED
+elif st.session_state.get("logged_in"):
     main_app()
 else:
     st.session_state.page = "auth"
