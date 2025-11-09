@@ -9,18 +9,38 @@ from database import Database
 from ai_engine import AIEngine
 from prompts import SUBJECT_PROMPTS, BADGES
 
-st.set_page_config(page_title="LearnFlow AI", layout="wide")
-st.markdown(
-    "<style>#MainMenu,footer,header{visibility:hidden;}</style>", unsafe_allow_html=True
+# --------------------------------------------------------------
+# PAGE CONFIG – hide Streamlit branding completely
+# --------------------------------------------------------------
+st.set_page_config(
+    page_title="LearnFlow AI",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+    menu_items=None,               # removes the hamburger menu
 )
 
-# ----------------------------------------------------------------------
-# INIT
-# ----------------------------------------------------------------------
-@st.cache_resource
-def get_db():
-    return Database()
+# HIDE Streamlit footer, header, menu, and the "Deployed on Streamlit" badge
+hide_streamlit_style = """
+<style>
+    /* Hide header / footer */
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
 
+    /* Hide the "Deployed on Streamlit" badge (bottom-right) */
+    .stApp > div:last-child {display: none !important;}
+
+    /* Optional: make the whole app look cleaner */
+    .block-container {padding-top: 2rem;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+# --------------------------------------------------------------
+# INIT
+# --------------------------------------------------------------
+@st.cache_resource
+def get_db(): return Database()
 
 @st.cache_resource
 def get_ai():
@@ -30,14 +50,13 @@ def get_ai():
         st.stop()
     return AIEngine(key)
 
-
 db = get_db()
 ai = get_ai()
 
 
-# ----------------------------------------------------------------------
-# SETTINGS (font, theme, language, 2FA)
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
+# SETTINGS (font / theme / language / 2FA)
+# --------------------------------------------------------------
 def apply_settings():
     font = st.session_state.get("font_size", 16)
     theme = st.session_state.get("theme", "light")
@@ -51,9 +70,9 @@ def apply_settings():
     st.markdown(css, unsafe_allow_html=True)
 
 
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 # WELCOME PAGE
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 def welcome():
     st.markdown(
         """
@@ -80,9 +99,9 @@ def welcome():
         st.rerun()
 
 
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 # AUTH (Login / Sign-up)
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 def auth():
     st.markdown("<h1 style='text-align:center;color:#00d4b1;'>Welcome Back!</h1>", unsafe_allow_html=True)
     login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
@@ -93,10 +112,11 @@ def auth():
             email = st.text_input("Email")
             pwd = st.text_input("Password", type="password")
             totp = st.text_input("2FA Code (if enabled)")
-            if st.form_submit_button("Login"):
+            login_btn = st.form_submit_button("Login")
+            if login_btn:
                 ok, msg = login_user(email.lower(), pwd, totp)
                 if ok:
-                    st.success("Logged in!")
+                    st.success("Logged in! Redirecting…")
                     time.sleep(1)
                     st.rerun()
                 else:
@@ -118,9 +138,9 @@ def auth():
                     st.balloons()
 
 
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 # LOGIN LOGIC
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 def login_user(email: str, password: str, totp_code: str = ""):
     user = db.get_user_by_email(email)
     if not user:
@@ -132,11 +152,12 @@ def login_user(email: str, password: str, totp_code: str = ""):
     if not bcrypt.checkpw(password.encode(), stored):
         return False, "Wrong password"
 
-    # 2FA check
+    # 2FA
     if user.get("two_fa_secret"):
         if not totp_code or not pyotp.TOTP(user["two_fa_secret"]).verify(totp_code):
             return False, "Invalid 2FA code"
 
+    # SUCCESS – set session state
     st.session_state.update(
         {
             "logged_in": True,
@@ -154,19 +175,17 @@ def login_user(email: str, password: str, totp_code: str = ""):
     return True, ""
 
 
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 # ADMIN CONTROL CENTER (full page)
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 def admin_control_center():
     st.markdown("# ADMIN CONTROL CENTER")
     st.success("Welcome KingMumo!")
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["Pending Payments", "All Users", "Revenue", "Leaderboard & Badges"]
-    )
+    t1, t2, t3, t4 = st.tabs(["Pending Payments", "All Users", "Revenue", "Leaderboard & Badges"])
 
-    # ---- Pending Payments (show M-Pesa ref + phone) ----
-    with tab1:
+    # ---- Pending Payments (show M-Pesa code + phone) ----
+    with t1:
         payments = db.get_pending_payments()
         if not payments:
             st.info("No pending payments")
@@ -186,7 +205,7 @@ def admin_control_center():
                         st.rerun()
 
     # ---- All Users ----
-    with tab2:
+    with t2:
         users = db.get_all_users()
         st.dataframe(
             [
@@ -202,32 +221,27 @@ def admin_control_center():
         )
 
     # ---- Revenue ----
-    with tab3:
+    with t3:
         total = db.get_revenue()
         st.metric("Total Revenue", f"KSh {total}")
-        # placeholder chart – replace with real data if you have it
-        st.bar_chart({"Jan": 0, "Feb": 0, "Mar": total})
 
     # ---- Leaderboard + Badges ----
-    with tab4:
-        st.markdown("### Leaderboard (Quiz Scores)")
+    with t4:
+        st.markdown("### Leaderboard")
         board = db.get_leaderboard(20)
-        for i, entry in enumerate(board):
-            st.write(
-                f"**#{i+1}** {entry['name']} — {entry['total_score']} pts ({entry['quizzes']} quizzes)"
-            )
+        for i, e in enumerate(board):
+            st.write(f"**#{i+1}** {e['name']} — {e['total_score']} pts ({e['quizzes']} quizzes)")
 
         st.markdown("### All User Badges")
         for u in db.get_all_users():
             ub = db.get_user_badges(u["user_id"])
             if ub:
-                badges_str = ", ".join([BADGES.get(b, b) for b in ub])
-                st.write(f"**{u['name']}**: {badges_str}")
+                st.write(f"**{u['name']}**: {', '.join([BADGES.get(b,b) for b in ub])}")
 
 
-# ----------------------------------------------------------------------
-# SETTINGS PAGE (font, theme, language, 2FA)
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
+# SETTINGS PAGE
+# --------------------------------------------------------------
 def settings_page():
     st.title("Settings")
     with st.form("settings_form"):
@@ -235,15 +249,14 @@ def settings_page():
             "Font Size", 12, 24, st.session_state.get("font_size", 16)
         )
         st.session_state.theme = st.selectbox(
-            "Theme",
-            ["light", "dark"],
+            "Theme", ["light", "dark"],
             index=0 if st.session_state.get("theme", "light") == "light" else 1,
         )
         st.session_state.lang = st.selectbox(
             "Language", ["English", "Kiswahili"], index=0
         )
 
-        # ---- 2FA toggle ----
+        # ---- 2FA ----
         user = db.get_user_by_email(st.session_state.user_email)
         has_2fa = bool(user.get("two_fa_secret"))
         enable_2fa = st.checkbox("Enable 2-Factor Authentication", value=has_2fa)
@@ -251,42 +264,41 @@ def settings_page():
         qr_img = None
         if enable_2fa and not has_2fa:
             secret = pyotp.random_base32()
-            totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
+            uri = pyotp.totp.TOTP(secret).provisioning_uri(
                 name=st.session_state.user_email, issuer_name="LearnFlow AI"
             )
-            qr = qrcode.make(totp_uri)
+            qr = qrcode.make(uri)
             buf = BytesIO()
             qr.save(buf, format="PNG")
             qr_img = buf.getvalue()
             st.session_state._new_2fa_secret = secret
 
         if qr_img:
-            st.image(qr_img, caption="Scan with Authenticator app")
-            st.info("After scanning, click **Save Settings** to activate 2FA.")
+            st.image(qr_img, caption="Scan with Authenticator")
+            st.info("Click **Save Settings** after scanning.")
 
         if st.form_submit_button("Save Settings"):
-            # Save basic settings
-            st.success("Settings saved!")
             # 2FA handling
             if enable_2fa and not has_2fa:
                 db.enable_2fa(st.session_state.user_id, st.session_state._new_2fa_secret)
                 del st.session_state._new_2fa_secret
             elif not enable_2fa and has_2fa:
                 db.disable_2fa(st.session_state.user_id)
+
+            st.success("Settings saved!")
             time.sleep(1)
             st.rerun()
 
 
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 # MAIN APP (Dashboard + Admin extras)
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 def main_app():
     apply_settings()
 
     # ---- Sidebar ----
     st.sidebar.success(f"Welcome {st.session_state.user_name}!")
 
-    # Common buttons
     if st.sidebar.button("My Account"):
         st.session_state.page = "dashboard"
     if st.sidebar.button("Settings"):
@@ -296,7 +308,6 @@ def main_app():
             del st.session_state[k]
         st.rerun()
 
-    # Admin only
     if st.session_state.is_admin:
         if st.sidebar.button("Control Center"):
             st.session_state.page = "admin_center"
@@ -309,16 +320,16 @@ def main_app():
         settings_page()
         return
 
-    # ---- Default Dashboard (same for premium & admin) ----
+    # ---- Default Dashboard ----
     st.title("My Dashboard")
     if st.session_state.is_admin:
         st.success("**Unlimited AI access** – no monthly limits.")
     elif st.session_state.is_premium:
-        st.info("Premium user – enjoy higher quotas.")
+        st.info("Premium – higher quotas.")
     else:
-        st.warning("Upgrade to Premium for more features!")
+        st.warning("Upgrade to Premium!")
 
-    # Leaderboard (top 5) & own badges
+    # Leaderboard (top 5) + own badges
     st.markdown("### Leaderboard")
     board = db.get_leaderboard(5)
     for i, e in enumerate(board):
@@ -329,7 +340,7 @@ def main_app():
         st.markdown("### My Badges")
         st.write(", ".join([BADGES.get(b, b) for b in my_badges]))
 
-    # Subject selector + chat/quiz toggle
+    # Subject selector + mode
     subject = st.sidebar.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
     mode = st.sidebar.radio("Mode", ["Chat", "Quiz"], horizontal=True)
     if mode == "Quiz":
@@ -338,17 +349,16 @@ def main_app():
         show_chat_mode(subject)
 
 
-# ----------------------------------------------------------------------
-# CHAT MODE
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
+# CHAT / QUIZ MODE
+# --------------------------------------------------------------
 def show_chat_mode(subject):
     st.header(subject)
-    prompt = st.chat_input("Ask me anything...")
+    prompt = st.chat_input("Ask me anything…")
     if prompt:
-        with st.chat_message("user"):
-            st.write(prompt)
+        with st.chat_message("user"): st.write(prompt)
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
+            with st.spinner("Thinking…"):
                 resp = ai.generate_response(
                     f"{SUBJECT_PROMPTS[subject]}\nStudent: {prompt}",
                     SUBJECT_PROMPTS[subject],
@@ -356,18 +366,11 @@ def show_chat_mode(subject):
             st.write(resp)
 
 
-# ----------------------------------------------------------------------
-# QUIZ MODE
-# ----------------------------------------------------------------------
 def show_quiz_mode(subject):
     st.header(f"Quiz – {subject}")
     if st.button("Start 5-Question Quiz"):
-        questions = ai.generate_mcq_questions(subject, 5)
-        st.session_state.quiz = {
-            "questions": questions,
-            "answers": {},
-            "start": time.time(),
-        }
+        qs = ai.generate_mcq_questions(subject, 5)
+        st.session_state.quiz = {"questions": qs, "answers": {}, "start": time.time()}
         st.rerun()
 
     if "quiz" in st.session_state:
@@ -378,23 +381,17 @@ def show_quiz_mode(subject):
                 q["answers"][i] = ans
 
         if st.button("Submit Quiz"):
-            result = ai.grade_mcq(q["questions"], q["answers"])
-            db.record_quiz_score(
-                st.session_state.user_id, subject, result["correct"], result["total"]
-            )
-            # Badges
+            res = ai.grade_mcq(q["questions"], q["answers"])
+            db.record_quiz_score(st.session_state.user_id, subject, res["correct"], res["total"])
+
             db.unlock_badge(st.session_state.user_id, "first_quiz")
-            if result["percentage"] == 100:
+            if res["percentage"] == 100:
                 db.unlock_badge(st.session_state.user_id, "perfect_score")
 
-            st.success(
-                f"Score: {result['correct']}/{result['total']} ({result['percentage']}%)"
-            )
-            for r in result["results"]:
+            st.success(f"Score: {res['correct']}/{res['total']} ({res['percentage']}%)")
+            for r in res["results"]:
                 st.write(f"**Q:** {r['question']}")
-                st.write(
-                    f"Your: {r['user_answer']} | Correct: {r['correct_answer']}"
-                )
+                st.write(f"Your: {r['user_answer']} | Correct: {r['correct_answer']}")
                 if not r["is_correct"]:
                     st.info(r["feedback"])
 
@@ -402,9 +399,9 @@ def show_quiz_mode(subject):
             st.rerun()
 
 
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 # ROUTER
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------
 if "page" not in st.session_state:
     st.session_state.page = "welcome"
 
