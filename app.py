@@ -1,12 +1,21 @@
 # app.py
 import streamlit as st
-import pyotp, qrcode, bcrypt, json
-from io import BytesIO
+import logging
 from database import Database
 from ai_engine import AIEngine
 from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
 import pandas as pd
-from datetime import datetime, date, timedelta
+from datetime import date
+import json
+
+# ────────────────────────────── CRITICAL: SHOW REAL ERRORS ──────────────────────────────
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def show_error(e):
+    st.error(f"App crashed: {type(e).__name__}: {e}")
+    logger.error(f"Crash: {e}", exc_info=True)
+st.exception_handler = show_error
 
 st.set_page_config(page_title="LearnFlow AI", page_icon="Kenya", layout="wide")
 
@@ -25,38 +34,41 @@ st.markdown("""
     .leaderboard {background:#f0f8ff; padding:20px; border-radius:10px; box-shadow:0 4px 8px rgba(0,0,0,0.1);}
     .badge-item {font-size:1.2em; color:#FFD700;}
     .tab-header {font-weight:bold; color:#009E60;}
-    .card {background:#fff; padding:15px; border-radius:12px; box-shadow:0 2px 6px rgba(0,0,0,0.1); margin:10px 0;}
     .premium-header {font-size:1.6rem; font-weight:bold; color:#FFD700; text-align:center;}
 </style>
 """, unsafe_allow_html=True)
 
-# ────────────────────────────── INITIALISERS ──────────────────────────────
+# ────────────────────────────── CLOUD-SAFE INITIALIZERS ──────────────────────────────
 @st.cache_resource
 def init_db():
     try:
-        return Database()
+        db = Database()
+        db.conn.execute("PRAGMA journal_mode=WAL;")
+        return db
     except Exception as e:
-        st.error("Database error – see logs.")
-        print(e)
+        st.error("Database failed. Using safe mode.")
+        logger.error(f"DB init failed: {e}")
         class Dummy:
             def __getattr__(self, _): return lambda *a, **k: None
             def get_leaderboard(self, _): return []
             def check_premium(self, _): return False
+            def get_user(self, _): return {}
         return Dummy()
 
 @st.cache_resource
 def init_ai():
     try:
-        key = st.secrets.get("GEMINI_API_KEY", "")
+        key = st.secrets["GEMINI_API_KEY"]  # Cloud: GitHub Secrets only
         return AIEngine(key)
     except Exception as e:
-        print(e)
+        st.warning("AI disabled: Set GEMINI_API_KEY in GitHub Secrets")
+        logger.warning(f"AI init failed: {e}")
         return AIEngine("")
 
 db = init_db()
 ai_engine = init_ai()
 
-# ────────────────────────────── SESSION STATE ──────────────────────────────
+# ────────────────────────────── SESSION & THEME ──────────────────────────────
 def init_session():
     defaults = {
         "logged_in": False, "user_id": None, "is_admin": False, "user": None,
@@ -68,27 +80,8 @@ def init_session():
 
 def apply_theme():
     css = f"body{{filter:brightness({st.session_state.brightness}%);font-family:{st.session_state.font};}}"
-    if st.session_state.theme == "dark":
-        css += "body{background:#222;color:#eee;}"
+    if st.session_state.theme == "dark": css += "body{background:#222;color:#eee;}"
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
-
-# ────────────────────────────── HELPERS ──────────────────────────────
-def qr_image(email, secret):
-    uri = pyotp.TOTP(secret).provisioning_uri(email, "LearnFlow AI")
-    qr = qrcode.make(uri)
-    buf = BytesIO()
-    qr.save(buf, "PNG")
-    return buf.getvalue()
-
-def login_user(email, pwd, totp=""):
-    if "@" not in email: return False, "Invalid email", None
-    user = db.get_user_by_email(email)
-    if not user or not bcrypt.checkpw(pwd.encode(), user["password_hash"].encode()):
-        return False, "Wrong credentials", None
-    if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
-        return False, "Bad 2FA code", None
-    db.update_user_activity(user["user_id"])
-    return True, "Logged in!", user
 
 # ────────────────────────────── UI BLOCKS ──────────────────────────────
 def welcome_screen():
@@ -113,13 +106,17 @@ def login_block():
             uid = db.create_user(email, pwd)
             st.success("Created! Log in.") if uid else st.error("Email taken")
         else:
-            ok, msg, u = login_user(email, pwd, totp)
-            st.write(msg)
-            if ok:
+            user = db.get_user_by_email(email)
+            if not user or not bcrypt.checkpw(pwd.encode(), user["password_hash"].encode()):
+                st.error("Wrong credentials")
+            elif db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
+                st.error("Bad 2FA code")
+            else:
+                db.update_user_activity(user["user_id"])
                 st.session_state.update({
-                    "logged_in": True, "user_id": u["user_id"],
-                    "is_admin": u["role"]=="admin", "user": u,
-                    "is_parent": bool(u.get("parent_id"))
+                    "logged_in": True, "user_id": user["user_id"],
+                    "is_admin": user["role"]=="admin", "user": user,
+                    "is_parent": bool(user.get("parent_id"))
                 })
                 st.rerun()
     st.stop()
@@ -171,19 +168,19 @@ def progress_tab():
     try:
         user = db.get_user(st.session_state.user_id) or {}
         c1,c2,c3 = st.columns(3)
-        c1.metric("Queries", user.get("total_queries",0))
-        c2.metric("Streak", f"{user.get('streak_days',0)} days")
-        badges = json.loads(user.get("badges","[]"))
+        c1.metric("Queries", user.get("total_queries", 0))
+        c2.metric("Streak", f"{user.get('streak_days', 0)} days")
+        badges = json.loads(user.get("badges", "[]"))
         c3.metric("Badges", len(badges))
 
         st.markdown('<span class="tab-header">### Your Badges</span>', unsafe_allow_html=True)
         for b in badges:
-            st.markdown(f'<div class="badge-item">- {BADGES.get(b,b)}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="badge-item">- {BADGES.get(b, b)}</div>', unsafe_allow_html=True)
 
         st.markdown('<span class="tab-header">### Leaderboards</span>', unsafe_allow_html=True)
-        exam_lb = db.get_leaderboard("exam")
-        essay_lb = db.get_leaderboard("essay")
-        col1,col2 = st.columns(2)
+        exam_lb = db.get_leaderboard("exam") or []
+        essay_lb = db.get_leaderboard("essay") or []
+        col1, col2 = st.columns(2)
         with col1:
             st.markdown('<div class="leaderboard"><b>Exam Prep</b></div>', unsafe_allow_html=True)
             if exam_lb:
@@ -206,14 +203,14 @@ def progress_tab():
                 db.apply_discount(uid, 0.10)
                 st.success(f"10% discount applied to leader in **{cat}**!")
     except Exception as e:
-        st.error("Progress tab error – see console.")
-        print(e)
+        st.error("Progress error")
+        logger.error(f"Progress tab: {e}")
 
 def exam_tab():
     st.markdown('<span class="tab-header">### Exam Prep</span>', unsafe_allow_html=True)
     exam = st.selectbox("Exam", list(EXAM_TYPES.keys()))
     subj = st.selectbox("Subject", EXAM_TYPES[exam]["subjects"])
-    n = st.slider("Questions",1,10,5)
+    n = st.slider("Questions", 1, 10, 5)
     if st.button("Generate"):
         with st.spinner("Generating…"):
             qs = ai_engine.generate_mcq_questions(subj, n)
@@ -223,17 +220,17 @@ def exam_tab():
 
     if "exam_questions" in st.session_state:
         qs = st.session_state.exam_questions
-        for i,q in enumerate(qs):
+        for i, q in enumerate(qs):
             st.markdown(f"**Q{i+1}:** {q['question']}")
             st.session_state.user_answers[i] = st.radio("Choose", q['options'], key=f"ans{i}")
         if st.button("Submit"):
             with st.spinner("Grading…"):
                 res = ai_engine.grade_mcq(qs, st.session_state.user_answers)
                 db.add_score(st.session_state.user_id, "exam", res["percentage"])
-                if res["percentage"]==100:
+                if res["percentage"] == 100:
                     db.add_badge(st.session_state.user_id, "perfect_score")
                     st.balloons()
-                st.markdown(f"**Score: {res['percentage']}%** ({res['correct']}/{res['total']})")
+                st.markdown(f"**Score: {res['percentage']}%**")
                 for r in res["results"]:
                     icon = "Correct" if r["is_correct"] else "Wrong"
                     st.markdown(f"- {icon} **{r['question']}**  \n  Your: `{r['user_answer']}`  \n  Correct: `{r['correct_answer']}`  \n  {r['feedback']}")
@@ -247,7 +244,7 @@ def essay_tab():
         with st.spinner("Grading…"):
             res = ai_engine.grade_essay(essay, rubric)
             db.add_score(st.session_state.user_id, "essay", res["score"])
-            if res["score"]>=90:
+            if res["score"] >= 90:
                 db.add_badge(st.session_state.user_id, "quiz_ace")
                 st.balloons()
             st.markdown(f"**Score: {res['score']}/100** – {res['feedback']}")
@@ -257,14 +254,14 @@ def premium_tab():
     st.markdown("### Unlock Unlimited Access, Leaderboards, and More!")
     st.info("**Send KES 500 to M-Pesa Phone Number:**\n\n`0701617120`\n\n(Use your registered phone number)")
     st.markdown("---")
-    phone = st.text_input("Your M-Pesa Phone Number (e.g. 07XXXXXXXX)")
-    code = st.text_input("M-Pesa Transaction Code (e.g. RKA...)")
+    phone = st.text_input("Your M-Pesa Phone Number")
+    code = st.text_input("M-Pesa Transaction Code")
     if st.button("Submit Proof of Payment", type="primary"):
         if not phone or not code:
-            st.error("Please fill both fields.")
+            st.error("Fill both fields")
         else:
             db.add_manual_payment(st.session_state.user_id, phone, code)
-            st.success("Payment proof submitted! Admin will activate your Premium within 24 hrs.")
+            st.success("Submitted! Admin will activate in 24 hrs.")
             st.balloons()
 
 def settings_tab():
@@ -275,7 +272,7 @@ def settings_tab():
             db.disable_2fa(st.session_state.user_id)
             st.rerun()
     else:
-        st.info("Enable 2FA (Google Authenticator)")
+        st.info("Enable 2FA")
         if st.button("Enable 2FA"):
             secret = db.generate_2fa_secret(st.session_state.user_id)
             st.image(qr_image(db.get_user(st.session_state.user_id)["email"], secret))
@@ -315,12 +312,12 @@ def admin_dashboard():
     st.subheader("User Management")
     uid = st.text_input("User ID")
     if uid:
-        col1,col2,col3 = st.columns(3)
-        with col1:
+        c1,c2,c3 = st.columns(3)
+        with c1: 
             if st.button("Add Premium"): db.toggle_premium(uid,True); st.success("Added")
-        with col2:
+        with c2: 
             if st.button("Revoke Premium"): db.toggle_premium(uid,False); st.success("Revoked")
-        with col3:
+        with c3: 
             if st.button("Revoke Badges"): db.revoke_user(uid); st.success("Done")
 
     st.markdown("### Pending Payments")
@@ -345,7 +342,6 @@ def main():
     login_block()
     sidebar()
 
-    # Build tabs — Premium only if NOT premium
     tabs = ["Chat Tutor","PDF Upload","Progress","Exam Prep","Essay Grader","Settings"]
     if not db.check_premium(st.session_state.user_id):
         tabs.insert(5, "Premium")
@@ -353,19 +349,15 @@ def main():
     if st.session_state.is_admin: tabs.append("Admin Dashboard")
 
     tab_objs = st.tabs(tabs)
-
-    # Fixed tab indexing
     idx = 0
     with tab_objs[idx]: chat_tab(); idx += 1
     with tab_objs[idx]: pdf_tab(); idx += 1
     with tab_objs[idx]: progress_tab(); idx += 1
     with tab_objs[idx]: exam_tab(); idx += 1
     with tab_objs[idx]: essay_tab(); idx += 1
-
     if "Premium" in tabs:
         with tab_objs[tabs.index("Premium")]: premium_tab(); idx += 1
     with tab_objs[idx]: settings_tab(); idx += 1
-
     if st.session_state.is_parent and "Parent Dashboard" in tabs:
         with tab_objs[tabs.index("Parent Dashboard")]: parent_dashboard()
     if st.session_state.is_admin and "Admin Dashboard" in tabs:
