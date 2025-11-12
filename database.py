@@ -18,7 +18,7 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
 
-    # === CREATE TABLES (always safe) ===
+    # === USERS TABLE ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
@@ -38,6 +38,7 @@ def init_db():
     )
     ''')
 
+    # === CHAT HISTORY ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS chat_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +50,7 @@ def init_db():
     )
     ''')
 
+    # === PDF UPLOADS ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS pdf_uploads (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +60,7 @@ def init_db():
     )
     ''')
 
+    # === MANUAL PAYMENTS ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS manual_payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,8 +72,8 @@ def init_db():
     )
     ''')
 
-    # === ENSURE ALL COLUMNS EXIST (prevents any ALTER error) ===
-    required = [
+    # === ADD MISSING COLUMNS (safe) ===
+    for col, typ in [
         ("last_active", "TEXT DEFAULT CURRENT_TIMESTAMP"),
         ("parent_id", "TEXT"),
         ("streak_days", "INTEGER DEFAULT 0"),
@@ -78,14 +81,13 @@ def init_db():
         ("badges", "TEXT DEFAULT '[]'"),
         ("is_premium", "INTEGER DEFAULT 0"),
         ("twofa_secret", "TEXT")
-    ]
-    for col, typ in required:
+    ]:
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
-            pass  # column exists
+            pass
 
-    # === CREATE ADMIN IF MISSING ===
+    # === CREATE ADMIN USER ===
     c.execute("SELECT 1 FROM users WHERE email = ?", ("kingmumo15@gmail.com",))
     if not c.fetchone():
         hashed = bcrypt.hashpw("@Yoounruly10".encode(), bcrypt.gensalt()).decode()
@@ -100,7 +102,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Run once on import
 init_db()
 
 class Database:
@@ -145,16 +146,15 @@ class Database:
         return dict(row) if row else None
 
     def update_user_activity(self, user_id: str):
-        """Never crashes – safe even if DB is corrupted"""
-        if not user_id:
-            return
+        if not user_id: return
         try:
-            c = self._c()
-            c.execute("UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
+            self._c().execute(
+                "UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?",
+                (user_id,)
+            )
             self.commit()
-        except Exception as e:
-            # In production, log silently
-            pass
+        except Exception:
+            pass  # Never crash
 
     # === STREAK ===
     def update_streak(self, user_id: str) -> int:
