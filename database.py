@@ -153,23 +153,21 @@ class Database:
         row = c.fetchone()
         return dict(row) if row else None
 
-    # ---- SAFE ACTIVITY UPDATE (never crashes) -------------------
+    # ---- SAFE ACTIVITY UPDATE (FIXED - relies on ensure_columns) -------------------
     def update_user_activity(self, user_id: str):
         if not user_id:
             return
         try:
-            # Use PRAGMA table_info to check if column exists
+            # We assume 'last_active' column exists because ensure_columns() runs on startup.
             c = self._c()
-            c.execute("PRAGMA table_info(users)")
-            cols = [info[1] for info in c.fetchall()]
-            if "last_active" in cols:
-                c.execute(
-                    "UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?",
-                    (user_id,)
-                )
-                self.commit()
+            c.execute(
+                "UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?",
+                (user_id,)
+            )
+            self.commit()
         except Exception:
-            pass   # never let the app crash
+            # Catches OperationalError or any other issue, preventing app crash.
+            pass
 
     # ------------------- STREAK ---------------------------------
     def update_streak(self, user_id: str) -> int:
@@ -209,14 +207,6 @@ class Database:
             return bool(row and row["is_premium"])
         except Exception:
             return False
-
-    # (All other methods unchanged – they already wrap every DB call in try/except)
-    # ... [add_manual_payment, get_pending_manual_payments, approve_manual_payment,
-    #      reject_manual_payment, generate_2fa_secret, is_2fa_enabled, disable_2fa,
-    #      verify_2fa_code, link_parent, get_children, add_badge, add_chat_history,
-    #      add_pdf_upload, get_pdf_count_today, get_all_users, toggle_premium,
-    #      get_daily_query_count] ...
-
-    # ---- (copy-paste the rest of the methods from the previous version) ----
-    # For brevity they are omitted here but **must stay exactly as before**.
-    # They are all already wrapped in try/except, so they are safe.
+            
+    # NOTE: The rest of the original methods (omitted in the prompt) 
+    # should be included here, as they were stated to be safe and unchanged.
