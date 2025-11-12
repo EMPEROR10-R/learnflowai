@@ -12,6 +12,7 @@ import random
 import pandas as pd
 import pyotp
 import qrcode
+import bcrypt
 from io import BytesIO
 from database import Database
 from ai_engine import AIEngine
