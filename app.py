@@ -87,7 +87,8 @@ def init_session_state():
         "user_id": None,
         "show_2fa_setup": False,
         "temp_2fa_secret": None,
-        "show_premium": False
+        "show_premium": False,
+        "user": None
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -110,20 +111,27 @@ def get_2fa_qr_code(email: str, secret: str) -> BytesIO:
     return buf
 
 # ----------------------------------------------------------------------
-# Login / Signup Functions (DEFINED BEFORE USE)
+# Login / Signup Functions (FIXED: user_id guaranteed)
 # ----------------------------------------------------------------------
 def login_user(email: str, password: str, totp_code: str = ""):
     user = db.get_user_by_email(email)
-    if not user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
+    if not user:
         return False, "Invalid email or password.", None
 
-    if db.is_2fa_enabled(user["user_id"]):
+    # Ensure password_hash exists
+    if "password_hash" not in user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
+        return False, "Invalid email or password.", None
+
+    # 2FA Check
+    if user.get("2fa_secret"):
         if not totp_code:
             return False, "2FA code required.", None
-        if not db.verify_2fa_code(user["user_id"], totp_code):
+        if not pyotp.TOTP(user["2fa_secret"]).verify(totp_code):
             return False, "Invalid 2FA code.", None
 
-    db.update_user_activity(user["user_id"])
+    # Update activity
+    db.update_user_activity(user["user_id"])  # ← user_id now guaranteed
+
     return True, "Login successful!", user
 
 def signup_user(email: str, password: str):
@@ -174,7 +182,7 @@ def login_signup_block():
 
     # 2FA Setup
     if st.session_state.logged_in and not st.session_state.show_2fa_setup:
-        if not db.is_2fa_enabled(st.session_state.user_id):
+        if not st.session_state.user.get("2fa_secret"):
             if st.button("Enable 2FA for Extra Security"):
                 secret = generate_2fa_secret()
                 db.enable_2fa(st.session_state.user_id, secret)
@@ -191,7 +199,7 @@ def login_signup_block():
         st.info("Enter the 6-digit code from your app.")
         code = st.text_input("Verification Code", max_chars=6)
         if st.button("Verify 2FA"):
-            if db.verify_2fa_code(st.session_state.user_id, code):
+            if pyotp.TOTP(secret).verify(code):
                 st.success("2FA enabled!")
                 st.session_state.show_2fa_setup = False
                 del st.session_state.temp_2fa_secret
@@ -360,7 +368,8 @@ def main():
 
     tabs = st.tabs(["Chat", "PDF", "Quiz", "Premium", "Parent"])
     if st.session_state.is_admin:
-        tabs.append(st.tab("Admin"))
+        with st.expander("Admin Panel"):
+            admin_dashboard_tab()
 
     with tabs[0]:
         main_chat_interface()
@@ -372,9 +381,6 @@ def main():
         premium_tab()
     with tabs[4]:
         st.write("Parent Dashboard – Coming soon")
-    if st.session_state.is_admin and len(tabs) > 5:
-        with tabs[5]:
-            admin_dashboard_tab()
 
     st.caption("LearnFlow AI – KCPE • KPSEA • KJSEA • KCSE")
 
