@@ -17,6 +17,7 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
 
+    # === CREATE USERS TABLE ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
@@ -24,18 +25,55 @@ def init_db():
         password_hash TEXT,
         name TEXT,
         role TEXT DEFAULT 'user',
-        streak_days INTEGER DEFAULT 0,
-        last_streak_date TEXT,
         total_queries INTEGER DEFAULT 0,
         is_premium INTEGER DEFAULT 0,
-        premium_until TEXT,
-        badges TEXT DEFAULT '[]',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         last_active TEXT DEFAULT CURRENT_TIMESTAMP,
         twofa_secret TEXT
     )
     ''')
 
+    # === AUTO-ADD MISSING COLUMNS ===
+    columns_to_add = [
+        ("streak_days", "INTEGER DEFAULT 0"),
+        ("last_streak_date", "TEXT"),
+        ("badges", "TEXT DEFAULT '[]'"),
+        ("is_premium", "INTEGER DEFAULT 0"),
+        ("last_active", "TEXT DEFAULT CURRENT_TIMESTAMP"),
+        ("twofa_secret", "TEXT")
+    ]
+
+    for col, definition in columns_to_add:
+        try:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+            print(f"Added column: {col}")  # Debug
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e):
+                print(f"Error adding {col}: {e}")
+
+    # === INITIALIZE STREAK FOR EXISTING USERS ===
+    c.execute("SELECT user_id FROM users WHERE last_streak_date IS NULL")
+    users_without_streak = c.fetchall()
+    if users_without_streak:
+        today = date.today().isoformat()
+        for user in users_without_streak:
+            c.execute(
+                "UPDATE users SET streak_days = 1, last_streak_date = ? WHERE user_id = ?",
+                (today, user["user_id"])
+            )
+        print(f"Initialized streak for {len(users_without_streak)} users")
+
+    # === CREATE ADMIN ===
+    c.execute("SELECT 1 FROM users WHERE email = ?", ("kingmumo15@gmail.com",))
+    if not c.fetchone():
+        hashed = bcrypt.hashpw("@Yoounruly10".encode(), bcrypt.gensalt()).decode()
+        c.execute(
+            "INSERT INTO users (user_id, email, password_hash, name, role, is_premium, streak_days, last_streak_date) "
+            "VALUES (?, ?, ?, ?, ?, 1, 1, ?)",
+            (str(uuid.uuid4()), "kingmumo15@gmail.com", hashed, "Admin King", "admin", date.today().isoformat())
+        )
+
+    # === OTHER TABLES ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS manual_payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,32 +85,10 @@ def init_db():
     )
     ''')
 
-    # Add missing columns safely
-    for col, typ in [
-        ("last_active", "TEXT"),
-        ("twofa_secret", "TEXT"),
-        ("badges", "TEXT DEFAULT '[]'"),
-        ("is_premium", "INTEGER DEFAULT 0"),
-        ("streak_days", "INTEGER DEFAULT 0"),
-        ("last_streak_date", "TEXT")
-    ]:
-        try:
-            c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
-        except:
-            pass
-
-    # Create admin
-    c.execute("SELECT 1 FROM users WHERE email = ?", ("kingmumo15@gmail.com",))
-    if not c.fetchone():
-        hashed = bcrypt.hashpw("@Yoounruly10".encode(), bcrypt.gensalt()).decode()
-        c.execute(
-            "INSERT INTO users (user_id, email, password_hash, name, role, is_premium) VALUES (?, ?, ?, ?, ?, 1)",
-            (str(uuid.uuid4()), "kingmumo15@gmail.com", hashed, "Admin King", "admin")
-        )
-
     conn.commit()
     conn.close()
 
+# Run DB upgrade
 init_db()
 
 class Database:
@@ -94,8 +110,13 @@ class Database:
     def create_user(self, email, pwd):
         uid = str(uuid.uuid4())
         h = bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()).decode()
+        today = date.today().isoformat()
         try:
-            self._c().execute("INSERT INTO users (user_id, email, password_hash, name) VALUES (?, ?, ?, ?)", (uid, email, h, email.split("@")[0]))
+            self._c().execute(
+                "INSERT INTO users (user_id, email, password_hash, name, streak_days, last_streak_date) "
+                "VALUES (?, ?, ?, ?, 1, ?)",
+                (uid, email, h, email.split("@")[0], today)
+            )
             self.commit()
             return uid
         except:
@@ -111,9 +132,9 @@ class Database:
         c = self._c()
         c.execute("SELECT last_streak_date, streak_days FROM users WHERE user_id = ?", (uid,))
         r = c.fetchone()
-        if not r:
-            # Initialize if missing
-            c.execute("UPDATE users SET streak_days = 1, last_streak_date = ? WHERE user_id = ?", (date.today().isoformat(), uid))
+        if not r or r["last_streak_date"] is None:
+            today = date.today().isoformat()
+            c.execute("UPDATE users SET streak_days = 1, last_streak_date = ? WHERE user_id = ?", (today, uid))
             self.commit()
             return 1
         last, streak = r["last_streak_date"], r["streak_days"] or 0
@@ -161,7 +182,7 @@ class Database:
         self.commit()
 
     def delete_user(self, uid):
-        if uid == st.session_state.user_id: return False
+        if not uid or uid == st.session_state.get("user_id"): return False
         c = self._c()
         c.execute("DELETE FROM users WHERE user_id = ?", (uid,))
         self.commit()
