@@ -72,8 +72,8 @@ def init_db():
     )
     ''')
 
-    # === AUTO-ADD MISSING COLUMNS ===
-    columns_to_add = [
+    # === ENSURE ALL COLUMNS EXIST (prevents OperationalError) ===
+    required_columns = [
         ("last_active", "TEXT DEFAULT CURRENT_TIMESTAMP"),
         ("parent_id", "TEXT"),
         ("streak_days", "INTEGER DEFAULT 0"),
@@ -82,13 +82,13 @@ def init_db():
         ("is_premium", "INTEGER DEFAULT 0"),
         ("twofa_secret", "TEXT")
     ]
-    for col, typ in columns_to_add:
+    for col, typ in required_columns:
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
-            pass  # already exists
+            pass  # column already exists
 
-    # === CREATE ADMIN ===
+    # === CREATE ADMIN USER ===
     c.execute("SELECT 1 FROM users WHERE email = ?", ("kingmumo15@gmail.com",))
     if not c.fetchone():
         hashed = bcrypt.hashpw("@Yoounruly10".encode(), bcrypt.gensalt()).decode()
@@ -96,13 +96,14 @@ def init_db():
         today = date.today().isoformat()
         c.execute('''
         INSERT INTO users 
-        (user_id, email, password_hash, name, role, is_premium, streak_days, last_streak_date)
-        VALUES (?, ?, ?, ?, 'admin', 1, 1, ?)
-        ''', (admin_id, "kingmumo15@gmail.com", hashed, "Admin King", today))
+        (user_id, email, password_hash, name, role, is_premium, streak_days, last_streak_date, last_active)
+        VALUES (?, ?, ?, ?, 'admin', 1, 1, ?, ?)
+        ''', (admin_id, "kingmumo15@gmail.com", hashed, "Admin King", today, today))
 
     conn.commit()
     conn.close()
 
+# Initialize DB on import
 init_db()
 
 class Database:
@@ -115,7 +116,7 @@ class Database:
     def commit(self):
         self.conn.commit()
 
-    # === USER ===
+    # === USER MANAGEMENT ===
     def create_user(self, email: str, password: str) -> Optional[str]:
         if not email or "@" not in email or len(password) < 6:
             return None
@@ -125,9 +126,10 @@ class Database:
         name = email.split("@")[0] if "@" in email else "User"
         try:
             self._c().execute('''
-            INSERT INTO users (user_id, email, password_hash, name, streak_days, last_streak_date)
-            VALUES (?, ?, ?, ?, 1, ?)
-            ''', (uid, email, hashed, name, today))
+            INSERT INTO users 
+            (user_id, email, password_hash, name, streak_days, last_streak_date, last_active)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
+            ''', (uid, email, hashed, name, today, today))
             self.commit()
             return uid
         except sqlite3.IntegrityError:
@@ -136,39 +138,46 @@ class Database:
     def get_user_by_email(self, email: str) -> Optional[Dict]:
         c = self._c()
         c.execute("SELECT * FROM users WHERE email = ?", (email,))
-        r = c.fetchone()
-        return dict(r) if r else None
+        row = c.fetchone()
+        return dict(row) if row else None
 
     def get_user(self, user_id: str) -> Optional[Dict]:
         c = self._c()
         c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-        r = c.fetchone()
-        return dict(r) if r else None
+        row = c.fetchone()
+        return dict(row) if row else None
 
     def update_user_activity(self, user_id: str):
-        if not user_id: return
+        """Safe update – ignores errors (prevents crash if column missing)"""
+        if not user_id:
+            return
         try:
-            self._c().execute("UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
+            self._c().execute(
+                "UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?",
+                (user_id,)
+            )
             self.commit()
-        except:
-            pass  # safe fallback
+        except Exception as e:
+            # Log only in dev; never crash app
+            print(f"[DB] Activity update failed: {e}")
 
     # === STREAK ===
     def update_streak(self, user_id: str) -> int:
         if not user_id: return 0
         c = self._c()
         c.execute("SELECT last_streak_date, streak_days FROM users WHERE user_id = ?", (user_id,))
-        r = c.fetchone()
-        if not r or r["last_streak_date"] is None:
+        row = c.fetchone()
+        if not row or not row["last_streak_date"]:
             today = date.today().isoformat()
             c.execute("UPDATE users SET streak_days = 1, last_streak_date = ? WHERE user_id = ?", (today, user_id))
             self.commit()
             return 1
-        last, streak = r["last_streak_date"], r["streak_days"] or 0
+        last_date, streak = row["last_streak_date"], row["streak_days"] or 0
         today = date.today().isoformat()
-        if last == today:
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        if last_date == today:
             return streak
-        elif last == (date.today() - timedelta(days=1)).isoformat():
+        elif last_date == yesterday:
             streak += 1
         else:
             streak = 1
@@ -181,8 +190,8 @@ class Database:
         if not user_id: return False
         c = self._c()
         c.execute("SELECT is_premium FROM users WHERE user_id = ?", (user_id,))
-        r = c.fetchone()
-        return bool(r and r["is_premium"])
+        row = c.fetchone()
+        return bool(row and row["is_premium"])
 
     def add_manual_payment(self, user_id: str, phone: str, code: str):
         self._c().execute("INSERT INTO manual_payments (user_id, phone, mpesa_code) VALUES (?, ?, ?)", (user_id, phone, code))
@@ -192,7 +201,8 @@ class Database:
         c = self._c()
         c.execute('''
         SELECT mp.id, mp.phone, mp.mpesa_code, u.email, u.name 
-        FROM manual_payments mp JOIN users u ON mp.user_id = u.user_id 
+        FROM manual_payments mp 
+        JOIN users u ON mp.user_id = u.user_id 
         WHERE mp.status = 'pending'
         ''')
         return [dict(r) for r in c.fetchall()]
@@ -200,9 +210,9 @@ class Database:
     def approve_manual_payment(self, pid: int) -> bool:
         c = self._c()
         c.execute("SELECT user_id FROM manual_payments WHERE id = ?", (pid,))
-        r = c.fetchone()
-        if not r: return False
-        uid = r["user_id"]
+        row = c.fetchone()
+        if not row: return False
+        uid = row["user_id"]
         c.execute("UPDATE users SET is_premium = 1 WHERE user_id = ?", (uid,))
         c.execute("UPDATE manual_payments SET status = 'approved' WHERE id = ?", (pid,))
         self.commit()
@@ -222,12 +232,8 @@ class Database:
     def is_2fa_enabled(self, user_id: str) -> bool:
         c = self._c()
         c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
-        r = c.fetchone()
-        return bool(r and r["twofa_secret"])
-
-    def enable_2fa(self, user_id: str, secret: str):
-        self._c().execute("UPDATE users SET twofa_secret = ? WHERE user_id = ?", (secret, user_id))
-        self.commit()
+        row = c.fetchone()
+        return bool(row and row["twofa_secret"])
 
     def disable_2fa(self, user_id: str):
         self._c().execute("UPDATE users SET twofa_secret = NULL WHERE user_id = ?", (user_id,))
@@ -236,14 +242,18 @@ class Database:
     def verify_2fa_code(self, user_id: str, code: str) -> bool:
         c = self._c()
         c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
-        r = c.fetchone()
-        return pyotp.TOTP(r["twofa_secret"]).verify(code) if r and r["twofa_secret"] else False
+        row = c.fetchone()
+        if not row or not row["twofa_secret"]:
+            return False
+        return pyotp.TOTP(row["twofa_secret"]).verify(code)
 
     # === PARENT LINK ===
     def link_parent(self, child_id: str, parent_email: str, parent_pass: str) -> str:
         parent = self.get_user_by_email(parent_email)
-        if not parent: return "Parent not found."
-        if not bcrypt.checkpw(parent_pass.encode(), parent["password_hash"].encode()): return "Wrong password."
+        if not parent:
+            return "Parent email not found."
+        if not bcrypt.checkpw(parent_pass.encode(), parent["password_hash"].encode()):
+            return "Incorrect password."
         self._c().execute("UPDATE users SET parent_id = ? WHERE user_id = ?", (parent["user_id"], child_id))
         self.commit()
         return f"Linked to {parent['email']}"
@@ -265,7 +275,8 @@ class Database:
 
     def add_chat_history(self, user_id: str, subject: str, q: str, r: str):
         self._c().execute('''
-        INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?, ?, ?, ?)
+        INSERT INTO chat_history (user_id, subject, user_query, ai_response) 
+        VALUES (?, ?, ?, ?)
         ''', (user_id, subject, q, r))
         self._c().execute("UPDATE users SET total_queries = total_queries + 1 WHERE user_id = ?", (user_id,))
         self.commit()
@@ -285,12 +296,6 @@ class Database:
         c.execute("SELECT user_id, email, name, role, is_premium, created_at FROM users")
         return [dict(r) for r in c.fetchall()]
 
-    def delete_user(self, user_id: str) -> bool:
-        if user_id == st.session_state.get("user_id"): return False
-        self._c().execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-        self.commit()
-        return True
-
     def toggle_premium(self, user_id: str):
         self._c().execute("UPDATE users SET is_premium = NOT is_premium WHERE user_id = ?", (user_id,))
         self.commit()
@@ -298,6 +303,7 @@ class Database:
     def get_daily_query_count(self, user_id: str) -> int:
         c = self._c()
         c.execute('''
-        SELECT COUNT(*) FROM chat_history WHERE user_id = ? AND date(timestamp) = ?
+        SELECT COUNT(*) FROM chat_history 
+        WHERE user_id = ? AND date(timestamp) = ?
         ''', (user_id, date.today().isoformat()))
         return c.fetchone()[0]

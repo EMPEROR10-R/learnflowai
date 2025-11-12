@@ -50,14 +50,14 @@ def qr_image(email, secret):
 
 def login_user(email, pwd, totp=""):
     if not email or "@" not in email:
-        return False, "Invalid email", None
+        return False, "Enter a valid email.", None
     user = db.get_user_by_email(email)
     if not user or not bcrypt.checkpw(pwd.encode(), user["password_hash"].encode()):
-        return False, "Invalid email or password", None
+        return False, "Invalid email or password.", None
     if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
-        return False, "Invalid 2FA code", None
-    db.update_user_activity(user["user_id"])
-    return True, "Login successful", user
+        return False, "Invalid 2FA code.", None
+    db.update_user_activity(user["user_id"])  # SAFE: wrapped in try/except in DB
+    return True, "Login successful!", user
 
 def welcome_screen():
     st.markdown('<div class="welcome-box"><h1>LearnFlow AI</h1><p>Your Kenyan AI Tutor</p><p>KCPE • KPSEA • KJSEA • KCSE</p></div>', unsafe_allow_html=True)
@@ -73,18 +73,18 @@ def login_block():
     choice = st.radio("Action", ["Login", "Sign Up"], horizontal=True)
     email = st.text_input("Email", key=f"{choice.lower()}_email")
     pwd = st.text_input("Password", type="password", key=f"{choice.lower()}_pwd")
-    totp = st.text_input("2FA Code", key="totp") if choice == "Login" else ""
+    totp = st.text_input("2FA Code (if enabled)", key="totp") if choice == "Login" else ""
 
     if st.button(choice):
         if not email or "@" not in email:
-            st.error("Enter a valid email.")
+            st.error("Please enter a valid email.")
         elif len(pwd) < 6:
             st.error("Password must be 6+ characters.")
         elif choice == "Sign Up":
             if db.create_user(email, pwd):
                 st.success("Account created! Now log in.")
             else:
-                st.error("Email already exists.")
+                st.error("Email already in use.")
         else:
             ok, msg, u = login_user(email, pwd, totp)
             st.write(msg)
@@ -129,25 +129,25 @@ def pdf_tab():
     uploaded = st.file_uploader("Upload PDF", type="pdf")
     if uploaded:
         txt = ai_engine.extract_text_from_pdf(uploaded.read())
-        st.success(f"Extracted {len(txt)} chars")
+        st.success(f"Extracted {len(txt)} characters")
         q = st.text_area("Ask about this PDF")
         if st.button("Ask") and q:
-            resp = ai_engine.generate_response(f"Document:\n{txt[:4000]}\n\nQuestion: {q}", "Answer in 1-2 sentences.")
+            resp = ai_engine.generate_response(f"Document:\n{txt[:4000]}\n\nQuestion: {q[:1000]}", "Answer in 1-2 sentences.")
             st.markdown(f"**AI:** {resp}")
 
 def progress_tab():
     user = db.get_user(st.session_state.user_id)
     c1,c2,c3 = st.columns(3)
-    c1.metric("Queries", user.get("total_queries",0))
-    c2.metric("Streak", f"{user.get('streak_days',0)} days")
-    badges = json.loads(user.get("badges","[]"))
+    c1.metric("Queries", user.get("total_queries", 0))
+    c2.metric("Streak", f"{user.get('streak_days', 0)} days")
+    badges = json.loads(user.get("badges", "[]"))
     c3.metric("Badges", len(badges))
 
 def exam_tab():
     st.markdown("### Exam Prep")
     exam = st.selectbox("Exam", ["KCPE", "KPSEA", "KJSEA", "KCSE"])
     subj = st.selectbox("Subject", SUBJECT_PROMPTS.keys())
-    n = st.slider("Questions",1,10,5)
+    n = st.slider("Questions", 1, 10, 5)
     if st.button("Generate"):
         prompt = f"Create {n} {exam} MCQs on {subj} (A-D, one correct)."
         resp = ai_engine.generate_response(prompt, "Markdown format.")
@@ -157,7 +157,7 @@ def essay_tab():
     st.markdown("### Essay Grader")
     essay = st.text_area("Paste essay", height=200)
     if st.button("Grade") and essay:
-        st.markdown(f"**Score:** 78/100 – Good structure, improve examples.")
+        st.markdown("**Score:** 78/100 – Good structure, improve examples.")
 
 def premium_tab():
     st.markdown("### Upgrade to Premium – KES 500/month")
@@ -198,7 +198,7 @@ def parent_dashboard():
         return
     for child in children:
         with st.expander(f"**{child.get('name') or child['email']}**"):
-            st.write("Activity coming soon…")
+            st.write("Activity tracking coming soon…")
 
 def admin_dashboard():
     if not st.session_state.is_admin:
@@ -209,7 +209,7 @@ def admin_dashboard():
     df = pd.DataFrame(users)
     if not df.empty:
         df["created_at"] = pd.to_datetime(df["created_at"]).dt.strftime("%Y-%m-%d")
-        st.dataframe(df)
+        st.dataframe(df, use_container_width=True)
     st.markdown("### Pending Manual Payments")
     pending = db.get_pending_manual_payments()
     if pending:
@@ -252,7 +252,7 @@ def main():
     with tab_objs[6]: settings_tab()
     if st.session_state.is_parent and len(tab_objs) > 7:
         with tab_objs[7]: parent_dashboard()
-    if st.session_state.is_admin and len(tab_objs) > (8 if st.session_state.is_parent else 7):
+    if st.session_state.is_admin and len(tab_objs) > (7 if not st.session_state.is_parent else 8):
         with tab_objs[-1]: admin_dashboard()
 
 if __name__ == "__main__":
