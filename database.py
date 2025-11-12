@@ -135,6 +135,7 @@ init_db()
 
 class Database:
     def __init__(self):
+        init_db()  # Ensure tables always
         self.conn = get_db()
         ensure_columns()  # Ensure columns exist on every instance
 
@@ -408,7 +409,8 @@ class Database:
             LIMIT 10
             """, (category,))
             return [{"email": row["email"], "score": row["total_score"]} for row in c.fetchall()]
-        except Exception:
+        except Exception as e:
+            print(f"Get leaderboard error: {e}")
             return []
 
     def get_monthly_leaders(self):
@@ -430,7 +432,8 @@ class Database:
                 if cat not in leaders:
                     leaders[cat] = row["user_id"]
             return [(uid, cat) for cat, uid in leaders.items()]
-        except:
+        except Exception as e:
+            print(f"Get monthly leaders error: {e}")
             return []
 
     def apply_discount(self, user_id, discount):

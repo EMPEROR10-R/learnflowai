@@ -31,7 +31,7 @@ SUBJECT_PROMPTS: Dict[str, str] = {
     "History and Government": "You are a History tutor. Cover Kenyan independence, world wars, governance, and citizenship. Promote civic responsibility.",
     "Geography": "You are a Geography tutor. Teach physical features, climate, population, and development. Use Kenya’s regions and resources.",
 
-    # Added as Requested: Python Programming (as an elective under Computer Science/Pre-Technical)
+    # Added as Requested: Python Programming
     "Python Programming": "You are a beginner-friendly Python tutor. Teach coding basics, loops, functions, data structures, and projects. Provide code snippets, explain errors, and encourage debugging with Kenyan-themed examples (e.g., simulating a matatu route planner)."
 }
 
@@ -60,7 +60,7 @@ EXAM_TYPES: Dict[str, Dict[str, any]] = {
             "Integrated Science", "Biology", "Chemistry", "Physics",
             "Agriculture", "Nutrition", "Home Science",
             "Pre-Technical Studies", "Business Studies", "Kenyan Sign Language",
-            "Python Programming"  # Added as elective/practical
+            "Python Programming"
         ]
     },
     "KCSE": {
@@ -70,7 +70,7 @@ EXAM_TYPES: Dict[str, Dict[str, any]] = {
             "Biology", "Chemistry", "Physics",
             "History and Government", "Geography",
             "Business Studies", "Agriculture", "Religious Education",
-            "Python Programming"  # Added as elective under Computer Science
+            "Python Programming"
         ]
     }
 }
@@ -90,29 +90,6 @@ BADGES: Dict[str, str] = {
 }
 
 # ==============================================================================
-# QUIZ-SPECIFIC PROMPT (for AI generation)
-# ==============================================================================
-QUIZ_GENERATION_PROMPT = """
-You are a professional quiz master for Kenyan curriculum exams.
-Generate high-quality, curriculum-aligned multiple-choice questions.
-
-Rules:
-1. Each question has exactly 4 options: A, B, C, D
-2. Only one correct answer
-3. Include a short feedback explaining the answer
-4. Use real Kenyan examples (e.g., counties, crops, history, science)
-5. Output ONLY valid JSON array like:
-[
-  {
-    "question": "What is the capital of Kenya?",
-    "options": ["A) Nairobi", "B) Mombasa", "C) Kisumu", "D) Nakuru"],
-    "correct_answer": "A) Nairobi",
-    "feedback": "Nairobi is the capital and largest city of Kenya."
-  }
-]
-"""
-
-# ==============================================================================
 # HELPER: Enhanced Prompt Builder
 # ==============================================================================
 def get_enhanced_prompt(subject: str, query: str, context: str = "") -> str:
@@ -129,23 +106,4 @@ Instructions:
 - Use examples relevant to Kenya.
 - Encourage the student to think and explain their reasoning.
 - End with a question to promote engagement.
-"""
-
-# ==============================================================================
-# QUIZ PROMPT (for generate_mcq_questions)
-# ==============================================================================
-def get_quiz_prompt(subject: str, num_questions: int = 5) -> str:
-    return f"""
-Generate {num_questions} multiple-choice questions for {subject} (KCSE/KPSEA level).
-Use Kenyan curriculum examples. Output **only valid JSON**.
-
-Follow this format exactly:
-[
-  {{
-    "question": "Question here?",
-    "options": ["A) Option 1", "B) Option 2", "C) Option 3", "D) Option 4"],
-    "correct_answer": "B) Option 2",
-    "feedback": "Brief explanation why B is correct."
-  }}
-]
 """
