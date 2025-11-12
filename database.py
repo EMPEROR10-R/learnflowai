@@ -18,7 +18,7 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
 
-    # === USERS TABLE ===
+    # === CREATE USERS TABLE (with last_active) ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
@@ -38,7 +38,7 @@ def init_db():
     )
     ''')
 
-    # === CHAT HISTORY ===
+    # === OTHER TABLES ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS chat_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,7 +50,6 @@ def init_db():
     )
     ''')
 
-    # === PDF UPLOADS ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS pdf_uploads (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +59,6 @@ def init_db():
     )
     ''')
 
-    # === MANUAL PAYMENTS ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS manual_payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,8 +70,9 @@ def init_db():
     )
     ''')
 
-    # === ADD MISSING COLUMNS (safe) ===
-    for col, typ in [
+    # === ENSURE ALL COLUMNS EXIST (CRITICAL FIX) ===
+    # This runs EVERY TIME the app starts → guarantees last_active exists
+    required_columns = [
         ("last_active", "TEXT DEFAULT CURRENT_TIMESTAMP"),
         ("parent_id", "TEXT"),
         ("streak_days", "INTEGER DEFAULT 0"),
@@ -81,11 +80,12 @@ def init_db():
         ("badges", "TEXT DEFAULT '[]'"),
         ("is_premium", "INTEGER DEFAULT 0"),
         ("twofa_secret", "TEXT")
-    ]:
+    ]
+    for col, typ in required_columns:
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
-            pass
+            pass  # already exists
 
     # === CREATE ADMIN USER ===
     c.execute("SELECT 1 FROM users WHERE email = ?", ("kingmumo15@gmail.com",))
@@ -102,6 +102,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Run on import
 init_db()
 
 class Database:
@@ -153,8 +154,8 @@ class Database:
                 (user_id,)
             )
             self.commit()
-        except Exception:
-            pass  # Never crash
+        except Exception as e:
+            print(f"[DB] Activity update failed: {e}")  # Dev only
 
     # === STREAK ===
     def update_streak(self, user_id: str) -> int:
