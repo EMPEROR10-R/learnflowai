@@ -1,62 +1,31 @@
-# app.py — WHITE SCREEN KILLER (Cloud 2025)
+# app.py — FINAL CLOUD-PROOF VERSION
 import streamlit as st
-import traceback
 
-# ────────────────────────────── FORCE ERRORS TO SHOW ──────────────────────────────
-def show_crash(e):
-    st.error("🚨 CRASH DETAILS:")
-    st.error(f"Type: {type(e).__name__}")
-    st.error(f"Message: {e}")
-    st.code(traceback.format_exc(), language="python")
-    st.stop()  # Stop execution to show error
+st.set_page_config(page_title="LearnFlow AI", page_icon="Kenya", layout="wide")
 
-st.exception_handler = show_crash
+# Force error display
+def show_error(e):
+    st.error(f"CRASH: {e}")
+    st.code(__import__('traceback').format_exc())
+st.exception_handler = show_error
 
-st.set_page_config(page_title="LearnFlow AI", page_icon="🇰🇪", layout="wide")
+st.markdown("# LearnFlow AI")
+st.success("App loaded successfully!")
 
-# ────────────────────────────── TEST BLOCK ──────────────────────────────
-st.markdown("# 🏆 LearnFlow AI – Loading Check")
-st.success("✅ Streamlit loaded!")
-
-# Test secrets
-try:
-    key = st.secrets.get("GEMINI_API_KEY", "MISSING")
-    if key == "MISSING":
-        st.error("❌ GEMINI_API_KEY not set in GitHub Secrets!")
-        st.info("Go to GitHub → Settings → Secrets → Add GEMINI_API_KEY")
-    else:
-        st.success("✅ Secrets loaded!")
-except Exception as e:
-    st.error(f"❌ Secrets failed: {e}")
-
-# Test imports
-st.markdown("### Import Tests")
+# Test key imports
 try:
     from database import Database
     db = Database()
-    st.success("✅ Database OK")
+    st.success("Database connected")
 except Exception as e:
-    st.error(f"❌ Database failed: {e}")
-    st.code(traceback.format_exc())
+    st.error(f"DB failed: {e}")
 
 try:
     from ai_engine import AIEngine
-    st.success("✅ AI Engine OK")
+    key = st.secrets.get("GEMINI_API_KEY", "")
+    ai = AIEngine(key) if key else None
+    st.success("AI ready" if key else "AI disabled (no key)")
 except Exception as e:
-    st.error(f"❌ AI Engine failed: {e}")
-    st.code(traceback.format_exc())
+    st.error(f"AI failed: {e}")
 
-try:
-    from prompts import SUBJECT_PROMPTS
-    st.success(f"✅ Prompts OK ({len(SUBJECT_PROMPTS)} subjects)")
-except Exception as e:
-    st.error(f"❌ Prompts failed: {e}")
-
-st.markdown("### Next Steps")
-st.info("""
-1. **If errors above:** Fix them (e.g., add GitHub Secret)
-2. **No errors:** Replace with full app.py
-3. **Push to GitHub** → Cloud auto-deploys
-""")
-
-st.button("Test Complete – Ready for Full App")
+st.info("Full app will load after this test passes.")
