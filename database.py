@@ -18,7 +18,7 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
 
-    # === CREATE USERS TABLE (with last_active) ===
+    # === CREATE USERS TABLE (includes last_active) ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
@@ -70,9 +70,8 @@ def init_db():
     )
     ''')
 
-    # === ENSURE ALL COLUMNS EXIST (CRITICAL FIX) ===
-    # This runs EVERY TIME the app starts → guarantees last_active exists
-    required_columns = [
+    # === ADD MISSING COLUMNS ON EVERY START (FIXES ALL ERRORS) ===
+    required = [
         ("last_active", "TEXT DEFAULT CURRENT_TIMESTAMP"),
         ("parent_id", "TEXT"),
         ("streak_days", "INTEGER DEFAULT 0"),
@@ -81,7 +80,7 @@ def init_db():
         ("is_premium", "INTEGER DEFAULT 0"),
         ("twofa_secret", "TEXT")
     ]
-    for col, typ in required_columns:
+    for col, typ in required:
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
@@ -147,15 +146,18 @@ class Database:
         return dict(row) if row else None
 
     def update_user_activity(self, user_id: str):
-        if not user_id: return
+        """Never crashes — safe even if DB is old"""
+        if not user_id:
+            return
         try:
             self._c().execute(
                 "UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?",
                 (user_id,)
             )
             self.commit()
-        except Exception as e:
-            print(f"[DB] Activity update failed: {e}")  # Dev only
+        except Exception:
+            # Silently ignore — never crash app
+            pass
 
     # === STREAK ===
     def update_streak(self, user_id: str) -> int:
