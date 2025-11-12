@@ -1,10 +1,11 @@
 # database.py
 import sqlite3
-import json
 import bcrypt
-from datetime import datetime, date, timedelta
+import json
 import uuid
+from datetime import datetime, date, timedelta
 import pyotp
+from typing import Optional, List, Dict, Any
 
 DB_PATH = "users.db"
 
@@ -17,78 +18,103 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
 
-    # === CREATE USERS TABLE ===
+    # === USERS TABLE ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
-        email TEXT UNIQUE,
-        password_hash TEXT,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
         name TEXT,
-        role TEXT DEFAULT 'user',
+        role TEXT DEFAULT 'user',  -- user, parent, admin
+        parent_id TEXT,
+        streak_days INTEGER DEFAULT 0,
+        last_streak_date TEXT,
         total_queries INTEGER DEFAULT 0,
         is_premium INTEGER DEFAULT 0,
+        badges TEXT DEFAULT '[]',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         last_active TEXT DEFAULT CURRENT_TIMESTAMP,
         twofa_secret TEXT
     )
     ''')
 
-    # === AUTO-ADD MISSING COLUMNS ===
-    columns_to_add = [
-        ("streak_days", "INTEGER DEFAULT 0"),
-        ("last_streak_date", "TEXT"),
-        ("badges", "TEXT DEFAULT '[]'"),
-        ("is_premium", "INTEGER DEFAULT 0"),
-        ("last_active", "TEXT DEFAULT CURRENT_TIMESTAMP"),
-        ("twofa_secret", "TEXT")
-    ]
+    # === CHAT HISTORY ===
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS chat_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        subject TEXT,
+        user_query TEXT,
+        ai_response TEXT,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
 
-    for col, definition in columns_to_add:
-        try:
-            c.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
-            print(f"Added column: {col}")  # Debug
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" not in str(e):
-                print(f"Error adding {col}: {e}")
+    # === PDF UPLOADS ===
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS pdf_uploads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        filename TEXT,
+        upload_date TEXT DEFAULT CURRENT_DATE
+    )
+    ''')
 
-    # === INITIALIZE STREAK FOR EXISTING USERS ===
-    c.execute("SELECT user_id FROM users WHERE last_streak_date IS NULL")
-    users_without_streak = c.fetchall()
-    if users_without_streak:
-        today = date.today().isoformat()
-        for user in users_without_streak:
-            c.execute(
-                "UPDATE users SET streak_days = 1, last_streak_date = ? WHERE user_id = ?",
-                (today, user["user_id"])
-            )
-        print(f"Initialized streak for {len(users_without_streak)} users")
-
-    # === CREATE ADMIN ===
-    c.execute("SELECT 1 FROM users WHERE email = ?", ("kingmumo15@gmail.com",))
-    if not c.fetchone():
-        hashed = bcrypt.hashpw("@Yoounruly10".encode(), bcrypt.gensalt()).decode()
-        c.execute(
-            "INSERT INTO users (user_id, email, password_hash, name, role, is_premium, streak_days, last_streak_date) "
-            "VALUES (?, ?, ?, ?, ?, 1, 1, ?)",
-            (str(uuid.uuid4()), "kingmumo15@gmail.com", hashed, "Admin King", "admin", date.today().isoformat())
-        )
-
-    # === OTHER TABLES ===
+    # === MANUAL PAYMENTS ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS manual_payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
         phone TEXT,
         mpesa_code TEXT,
-        status TEXT DEFAULT 'pending',
+        status TEXT DEFAULT 'pending',  -- pending, approved, rejected
         submitted_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     ''')
 
+    # === ACTIVITY LOG (for parent dashboard) ===
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS activity_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        action TEXT,
+        duration_minutes INTEGER DEFAULT 0,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
+    # === AUTO-ADD MISSING COLUMNS ===
+    columns_to_add = [
+        ("parent_id", "TEXT"),
+        ("streak_days", "INTEGER DEFAULT 0"),
+        ("last_streak_date", "TEXT"),
+        ("badges", "TEXT DEFAULT '[]'"),
+        ("is_premium", "INTEGER DEFAULT 0"),
+        ("twofa_secret", "TEXT"),
+        ("last_active", "TEXT DEFAULT CURRENT_TIMESTAMP")
+    ]
+    for col, typ in columns_to_add:
+        try:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass  # already exists
+
+    # === CREATE ADMIN ===
+    c.execute("SELECT 1 FROM users WHERE email = ?", ("kingmumo15@gmail.com",))
+    if not c.fetchone():
+        hashed = bcrypt.hashpw("@Yoounruly10".encode(), bcrypt.gensalt()).decode()
+        admin_id = str(uuid.uuid4())
+        today = date.today().isoformat()
+        c.execute('''
+        INSERT INTO users 
+        (user_id, email, password_hash, name, role, is_premium, streak_days, last_streak_date)
+        VALUES (?, ?, ?, ?, 'admin', 1, 1, ?)
+        ''', (admin_id, "kingmumo15@gmail.com", hashed, "Admin King", today))
+
     conn.commit()
     conn.close()
 
-# Run DB upgrade
+# Run on import
 init_db()
 
 class Database:
@@ -101,114 +127,206 @@ class Database:
     def commit(self):
         self.conn.commit()
 
-    def get_user_by_email(self, email):
-        c = self._c()
-        c.execute("SELECT * FROM users WHERE email = ?", (email,))
-        r = c.fetchone()
-        return dict(r) if r else None
+    def close(self):
+        self.conn.close()
 
-    def create_user(self, email, pwd):
+    # === USER AUTH ===
+    def create_user(self, email: str, password: str) -> Optional[str]:
         uid = str(uuid.uuid4())
-        h = bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()).decode()
+        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         today = date.today().isoformat()
         try:
-            self._c().execute(
-                "INSERT INTO users (user_id, email, password_hash, name, streak_days, last_streak_date) "
-                "VALUES (?, ?, ?, ?, 1, ?)",
-                (uid, email, h, email.split("@")[0], today)
-            )
+            self._c().execute('''
+            INSERT INTO users 
+            (user_id, email, password_hash, name, streak_days, last_streak_date)
+            VALUES (?, ?, ?, ?, 1, ?)
+            ''', (uid, email, hashed, email.split("@")[0], today))
             self.commit()
             return uid
-        except:
+        except sqlite3.IntegrityError:
             return None
 
-    def update_user_activity(self, uid):
-        if not uid: return
-        self._c().execute("UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?", (uid,))
+    def get_user_by_email(self, email: str) -> Optional[Dict]:
+        c = self._c()
+        c.execute("SELECT * FROM users WHERE email = ?", (email,))
+        row = c.fetchone()
+        return dict(row) if row else None
+
+    def get_user(self, user_id: str) -> Optional[Dict]:
+        c = self._c()
+        c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        return dict(row) if row else None
+
+    def update_user_activity(self, user_id: str):
+        if not user_id: return
+        self._c().execute(
+            "UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?",
+            (user_id,)
+        )
         self.commit()
 
-    def update_streak(self, uid):
-        if not uid: return 0
+    # === STREAK ===
+    def update_streak(self, user_id: str) -> int:
+        if not user_id: return 0
         c = self._c()
-        c.execute("SELECT last_streak_date, streak_days FROM users WHERE user_id = ?", (uid,))
-        r = c.fetchone()
-        if not r or r["last_streak_date"] is None:
+        c.execute("SELECT last_streak_date, streak_days FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        if not row:
             today = date.today().isoformat()
-            c.execute("UPDATE users SET streak_days = 1, last_streak_date = ? WHERE user_id = ?", (today, uid))
+            c.execute("UPDATE users SET streak_days = 1, last_streak_date = ? WHERE user_id = ?", (today, user_id))
             self.commit()
             return 1
-        last, streak = r["last_streak_date"], r["streak_days"] or 0
+
+        last_date, streak = row["last_streak_date"], row["streak_days"] or 0
         today = date.today().isoformat()
-        if last == today:
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+        if last_date == today:
             return streak
-        elif last == (date.today() - timedelta(days=1)).isoformat():
+        elif last_date == yesterday:
             streak += 1
         else:
             streak = 1
-        c.execute("UPDATE users SET streak_days = ?, last_streak_date = ? WHERE user_id = ?", (streak, today, uid))
+
+        c.execute("UPDATE users SET streak_days = ?, last_streak_date = ? WHERE user_id = ?", (streak, today, user_id))
         self.commit()
         return streak
 
-    def check_premium(self, uid):
-        if not uid: return False
+    # === PREMIUM ===
+    def check_premium(self, user_id: str) -> bool:
+        if not user_id: return False
         c = self._c()
-        c.execute("SELECT is_premium FROM users WHERE user_id = ?", (uid,))
-        r = c.fetchone()
-        return bool(r and r["is_premium"])
+        c.execute("SELECT is_premium FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        return bool(row and row["is_premium"])
 
-    def add_manual_payment(self, uid, phone, code):
-        self._c().execute("INSERT INTO manual_payments (user_id, phone, mpesa_code) VALUES (?, ?, ?)", (uid, phone, code))
+    def add_manual_payment(self, user_id: str, phone: str, mpesa_code: str):
+        self._c().execute(
+            "INSERT INTO manual_payments (user_id, phone, mpesa_code) VALUES (?, ?, ?)",
+            (user_id, phone, mpesa_code)
+        )
         self.commit()
 
-    def get_pending_manual_payments(self):
+    def get_pending_manual_payments(self) -> List[Dict]:
         c = self._c()
-        c.execute("SELECT mp.id, mp.phone, mp.mpesa_code, u.email, u.name FROM manual_payments mp JOIN users u ON mp.user_id = u.user_id WHERE mp.status = 'pending'")
+        c.execute('''
+        SELECT mp.id, mp.phone, mp.mpesa_code, u.email, u.name 
+        FROM manual_payments mp 
+        JOIN users u ON mp.user_id = u.user_id 
+        WHERE mp.status = 'pending'
+        ''')
         return [dict(r) for r in c.fetchall()]
 
-    def approve_manual_payment(self, pid):
+    def approve_manual_payment(self, payment_id: int) -> bool:
         c = self._c()
-        c.execute("SELECT user_id FROM manual_payments WHERE id = ?", (pid,))
-        r = c.fetchone()
-        if r:
-            uid = r["user_id"]
-            c.execute("UPDATE users SET is_premium = 1 WHERE user_id = ?", (uid,))
-            c.execute("UPDATE manual_payments SET status = 'approved' WHERE id = ?", (pid,))
-            self.commit()
-            return True
-        return False
-
-    def reject_manual_payment(self, pid):
-        self._c().execute("UPDATE manual_payments SET status = 'rejected' WHERE id = ?", (pid,))
-        self.commit()
-
-    def delete_user(self, uid):
-        if not uid or uid == st.session_state.get("user_id"): return False
-        c = self._c()
-        c.execute("DELETE FROM users WHERE user_id = ?", (uid,))
+        c.execute("SELECT user_id FROM manual_payments WHERE id = ?", (payment_id,))
+        row = c.fetchone()
+        if not row: return False
+        user_id = row["user_id"]
+        c.execute("UPDATE users SET is_premium = 1 WHERE user_id = ?", (user_id,))
+        c.execute("UPDATE manual_payments SET status = 'approved' WHERE id = ?", (payment_id,))
         self.commit()
         return True
 
-    def is_2fa_enabled(self, uid):
-        c = self._c()
-        c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (uid,))
-        r = c.fetchone()
-        return bool(r and r["twofa_secret"])
-
-    def enable_2fa(self, uid, secret):
-        self._c().execute("UPDATE users SET twofa_secret = ? WHERE user_id = ?", (secret, uid))
+    def reject_manual_payment(self, payment_id: int):
+        self._c().execute("UPDATE manual_payments SET status = 'rejected' WHERE id = ?", (payment_id,))
         self.commit()
 
-    def disable_2fa(self, uid):
-        self._c().execute("UPDATE users SET twofa_secret = NULL WHERE user_id = ?", (uid,))
+    # === 2FA ===
+    def generate_2fa_secret(self, user_id: str) -> str:
+        secret = pyotp.random_base32()
+        self._c().execute("UPDATE users SET twofa_secret = ? WHERE user_id = ?", (secret, user_id))
+        self.commit()
+        return secret
+
+    def is_2fa_enabled(self, user_id: str) -> bool:
+        c = self._c()
+        c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        return bool(row and row["twofa_secret"])
+
+    def enable_2fa(self, user_id: str, secret: str):
+        self._c().execute("UPDATE users SET twofa_secret = ? WHERE user_id = ?", (secret, user_id))
         self.commit()
 
-    def verify_2fa_code(self, uid, code):
-        c = self._c()
-        c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (uid,))
-        r = c.fetchone()
-        return pyotp.TOTP(r["twofa_secret"]).verify(code) if r and r["twofa_secret"] else False
-
-    def add_chat_history(self, uid, subj, q, r):
-        c = self._c()
-        c.execute("INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?, ?, ?, ?)", (uid, subj, q, r))
+    def disable_2fa(self, user_id: str):
+        self._c().execute("UPDATE users SET twofa_secret = NULL WHERE user_id = ?", (user_id,))
         self.commit()
+
+    def verify_2fa_code(self, user_id: str, code: str) -> bool:
+        c = self._c()
+        c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        if not row or not row["twofa_secret"]:
+            return False
+        return pyotp.TOTP(row["twofa_secret"]).verify(code)
+
+    # === PARENT-CHILD LINKING ===
+    def link_parent(self, child_id: str, parent_email: str, parent_pass: str) -> str:
+        parent = self.get_user_by_email(parent_email)
+        if not parent:
+            return "Parent email not found."
+        if not bcrypt.checkpw(parent_pass.encode(), parent["password_hash"].encode()):
+            return "Incorrect password."
+        self._c().execute("UPDATE users SET parent_id = ? WHERE user_id = ?", (parent["user_id"], child_id))
+        self.commit()
+        return f"Linked to parent: {parent['email']}"
+
+    def get_children(self, parent_id: str) -> List[Dict]:
+        c = self._c()
+        c.execute("SELECT * FROM users WHERE parent_id = ?", (parent_id,))
+        return [dict(r) for r in c.fetchall()]
+
+    # === BADGES ===
+    def add_badge(self, user_id: str, badge_key: str):
+        user = self.get_user(user_id)
+        if not user: return
+        badges = json.loads(user.get("badges", "[]"))
+        if badge_key not in badges:
+            badges.append(badge_key)
+            self._c().execute("UPDATE users SET badges = ? WHERE user_id = ?", (json.dumps(badges), user_id))
+            self.commit()
+
+    # === CHAT & ACTIVITY ===
+    def add_chat_history(self, user_id: str, subject: str, query: str, response: str):
+        self._c().execute('''
+        INSERT INTO chat_history (user_id, subject, user_query, ai_response)
+        VALUES (?, ?, ?, ?)
+        ''', (user_id, subject, query, response))
+        self._c().execute("UPDATE users SET total_queries = total_queries + 1 WHERE user_id = ?", (user_id,))
+        self.commit()
+
+    def add_pdf_upload(self, user_id: str, filename: str):
+        self._c().execute("INSERT INTO pdf_uploads (user_id, filename) VALUES (?, ?)", (user_id, filename))
+        self.commit()
+
+    def get_pdf_count_today(self, user_id: str) -> int:
+        c = self._c()
+        c.execute("SELECT COUNT(*) FROM pdf_uploads WHERE user_id = ? AND upload_date = ?", (user_id, date.today().isoformat()))
+        return c.fetchone()[0]
+
+    # === ADMIN UTILITIES ===
+    def get_all_users(self) -> List[Dict]:
+        c = self._c()
+        c.execute("SELECT user_id, email, name, role, is_premium, created_at FROM users")
+        return [dict(r) for r in c.fetchall()]
+
+    def delete_user(self, user_id: str):
+        if user_id == st.session_state.get("user_id"): return False
+        self._c().execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        self.commit()
+        return True
+
+    def toggle_premium(self, user_id: str):
+        self._c().execute("UPDATE users SET is_premium = NOT is_premium WHERE user_id = ?", (user_id,))
+        self.commit()
+
+    # === DAILY LIMITS (FREE TIER) ===
+    def get_daily_query_count(self, user_id: str) -> int:
+        c = self._c()
+        c.execute('''
+        SELECT COUNT(*) FROM chat_history 
+        WHERE user_id = ? AND date(timestamp) = ?
+        ''', (user_id, date.today().isoformat()))
+        return c.fetchone()[0]
