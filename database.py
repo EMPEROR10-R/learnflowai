@@ -37,17 +37,6 @@ def init_db():
     ''')
 
     c.execute('''
-    CREATE TABLE IF NOT EXISTS chat_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        subject TEXT,
-        user_query TEXT,
-        ai_response TEXT,
-        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-
-    c.execute('''
     CREATE TABLE IF NOT EXISTS manual_payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
@@ -58,8 +47,15 @@ def init_db():
     )
     ''')
 
-    # Add missing columns
-    for col, typ in [("last_active", "TEXT"), ("twofa_secret", "TEXT"), ("badges", "TEXT DEFAULT '[]'"), ("is_premium", "INTEGER DEFAULT 0")]:
+    # Add missing columns safely
+    for col, typ in [
+        ("last_active", "TEXT"),
+        ("twofa_secret", "TEXT"),
+        ("badges", "TEXT DEFAULT '[]'"),
+        ("is_premium", "INTEGER DEFAULT 0"),
+        ("streak_days", "INTEGER DEFAULT 0"),
+        ("last_streak_date", "TEXT")
+    ]:
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
         except:
@@ -89,6 +85,12 @@ class Database:
     def commit(self):
         self.conn.commit()
 
+    def get_user_by_email(self, email):
+        c = self._c()
+        c.execute("SELECT * FROM users WHERE email = ?", (email,))
+        r = c.fetchone()
+        return dict(r) if r else None
+
     def create_user(self, email, pwd):
         uid = str(uuid.uuid4())
         h = bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()).decode()
@@ -99,19 +101,8 @@ class Database:
         except:
             return None
 
-    def get_user_by_email(self, email):
-        c = self._c()
-        c.execute("SELECT * FROM users WHERE email = ?", (email,))
-        r = c.fetchone()
-        return dict(r) if r else None
-
-    def get_user(self, uid):
-        c = self._c()
-        c.execute("SELECT * FROM users WHERE user_id = ?", (uid,))
-        r = c.fetchone()
-        return dict(r) if r else None
-
     def update_user_activity(self, uid):
+        if not uid: return
         self._c().execute("UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?", (uid,))
         self.commit()
 
@@ -120,7 +111,11 @@ class Database:
         c = self._c()
         c.execute("SELECT last_streak_date, streak_days FROM users WHERE user_id = ?", (uid,))
         r = c.fetchone()
-        if not r: return 0
+        if not r:
+            # Initialize if missing
+            c.execute("UPDATE users SET streak_days = 1, last_streak_date = ? WHERE user_id = ?", (date.today().isoformat(), uid))
+            self.commit()
+            return 1
         last, streak = r["last_streak_date"], r["streak_days"] or 0
         today = date.today().isoformat()
         if last == today:
@@ -166,14 +161,11 @@ class Database:
         self.commit()
 
     def delete_user(self, uid):
+        if uid == st.session_state.user_id: return False
         c = self._c()
         c.execute("DELETE FROM users WHERE user_id = ?", (uid,))
         self.commit()
-
-    def get_all_users(self):
-        c = self._c()
-        c.execute("SELECT user_id, email, name, role, is_premium FROM users")
-        return [dict(r) for r in c.fetchall()]
+        return True
 
     def is_2fa_enabled(self, uid):
         c = self._c()
@@ -198,5 +190,4 @@ class Database:
     def add_chat_history(self, uid, subj, q, r):
         c = self._c()
         c.execute("INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?, ?, ?, ?)", (uid, subj, q, r))
-        c.execute("UPDATE users SET total_queries = total_queries + 1 WHERE user_id = ?", (uid,))
         self.commit()

@@ -6,19 +6,18 @@ from io import BytesIO
 import bcrypt
 from database import Database
 from ai_engine import AIEngine
-from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, BADGES
+from prompts import SUBJECT_PROMPTS, get_enhanced_prompt
 
 st.set_page_config(page_title="LearnFlow AI", layout="wide", page_icon="Kenya")
 st.markdown("""
 <style>
     @keyframes fadeInDown { from {opacity:0; transform:translateY(-30px);} to {opacity:1; transform:translateY(0);} }
-    @keyframes pulse { 0%,100% {transform:scale(1);} 50% {transform:scale(1.05);} }
     .main-header {font-size:2.8rem; font-weight:bold;
         background:linear-gradient(135deg,#009E60,#FFD700,#CE1126);
         -webkit-background-clip:text; -webkit-text-fill-color:transparent;
         text-align:center; animation:fadeInDown 1s ease-out;}
-    .welcome-box {background:linear-gradient(135deg,#009E60,#FFD700); padding:40px; border-radius:20px; color:white; text-align:center; animation:fadeInDown 1.2s;}
-    .streak-badge {background:linear-gradient(135deg,#FF6B6B,#FFE66D); padding:8px 16px; border-radius:20px; color:white; font-weight:bold; animation:pulse 2s infinite;}
+    .welcome-box {background:linear-gradient(135deg,#009E60,#FFD700); padding:40px; border-radius:20px; color:white; text-align:center;}
+    .streak-badge {background:linear-gradient(135deg,#FF6B6B,#FFE66D); padding:8px 16px; border-radius:20px; color:white; font-weight:bold;}
     .premium-badge {background:#FFD700; color:#000; padding:4px 12px; border-radius:12px; font-weight:bold;}
 </style>
 """, unsafe_allow_html=True)
@@ -41,7 +40,11 @@ def init_session():
         "chat_history": [], "current_subject": "Mathematics"
     }
     for k, v in defaults.items():
-        if k not in st.session_state: st.session_state[k] = v
+        if k not in st.session_state:
+            st.session_state[k] = v
+    # Force logout on load
+    st.session_state.logged_in = False
+    st.session_state.show_welcome = True
 
 def qr_code(email, secret):
     uri = pyotp.TOTP(secret).provisioning_uri(email, "LearnFlow AI")
@@ -59,11 +62,6 @@ def login_user(email, pwd, code=""):
     db.update_user_activity(user["user_id"])
     return True, "Success!", user
 
-def signup_user(email, pwd):
-    if db.get_user_by_email(email): return False, "Email exists."
-    if db.create_user(email, pwd): return True, "Account created!"
-    return False, "Failed."
-
 def login_block():
     if st.session_state.logged_in: return
     st.markdown("### Login or Sign Up")
@@ -74,8 +72,10 @@ def login_block():
 
     if st.button(choice):
         if choice == "Sign Up":
-            s, m = signup_user(email, pwd)
-            st.write(m); st.success("Now log in.") if s else None
+            if db.create_user(email, pwd):
+                st.success("Account created! Now log in.")
+            else:
+                st.error("Email exists.")
         else:
             s, m, u = login_user(email, pwd, totp)
             st.write(m)
@@ -85,29 +85,6 @@ def login_block():
                     "is_admin": u["role"] == "admin", "user": u
                 })
                 st.rerun()
-
-    # 2FA Setup
-    if st.session_state.logged_in and not st.session_state.show_2fa_setup:
-        if not db.is_2fa_enabled(st.session_state.user_id):
-            if st.button("Enable 2FA"):
-                secret = pyotp.random_base32()
-                db.enable_2fa(st.session_state.user_id, secret)
-                st.session_state.temp_2fa_secret = secret
-                st.session_state.show_2fa_setup = True
-                st.rerun()
-
-    if st.session_state.show_2fa_setup:
-        st.markdown("### Scan QR Code")
-        st.image(qr_code(st.session_state.user["email"], st.session_state.temp_2fa_secret))
-        code = st.text_input("Enter code")
-        if st.button("Verify"):
-            if db.verify_2fa_code(st.session_state.user_id, code):
-                st.success("2FA Enabled!")
-                st.session_state.show_2fa_setup = False
-                del st.session_state.temp_2fa_secret
-                st.rerun()
-            else:
-                st.error("Invalid")
 
     st.stop()
 
@@ -123,7 +100,7 @@ def sidebar():
         st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
         
         if st.button("Enable 2FA") if not db.is_2fa_enabled(st.session_state.user_id) else st.button("Disable 2FA"):
-            if "Enable" in st.session_state.get("last_button", ""):  # toggle
+            if "Enable" in st.session_state.get("last_button", ""):
                 secret = pyotp.random_base32()
                 db.enable_2fa(st.session_state.user_id, secret)
                 st.session_state.temp_2fa_secret = secret
@@ -138,47 +115,19 @@ def sidebar():
 
 def admin_center():
     st.subheader("Admin Control Center")
-    tab1, tab2 = st.tabs(["Users", "Payments"])
-
-    with tab1:
-        users = db.get_all_users()
-        for u in users:
-            with st.expander(f"{u['name']} ({u['email']}) - {'Admin' if u['role']=='admin' else 'User'}"):
-                if st.button("Delete", key=f"del_{u['user_id']}"):
-                    if u["role"] != "admin":
-                        db.delete_user(u["user_id"])
-                        st.success("Deleted")
-                        st.rerun()
-
-    with tab2:
-        payments = db.get_pending_manual_payments()
-        for p in payments:
-            with st.expander(f"{p['name']} - {p['phone']} - {p['mpesa_code']}"):
-                if st.button("Approve", key=f"app_{p['id']}"):
-                    db.approve_manual_payment(p["id"])
-                    st.success("Approved!")
+    users = db.get_all_users() if hasattr(db, 'get_all_users') else []
+    for u in users:
+        with st.expander(f"{u['name']} ({u['email']})"):
+            if st.button("Delete", key=f"del_{u['user_id']}"):
+                if u["role"] != "admin":
+                    db.delete_user(u["user_id"])
+                    st.success("Deleted")
                     st.rerun()
-                if st.button("Reject", key=f"rej_{p['id']}"):
-                    db.reject_manual_payment(p["id"])
-                    st.rerun()
-
-def main_chat():
-    st.markdown(f"### {st.session_state.current_subject} Tutor")
-    for m in st.session_state.chat_history:
-        st.markdown(f"**{'You' if m['role']=='user' else 'AI'}**: {m['content']}")
-    q = st.text_area("Ask:", height=100)
-    if st.button("Send") and q:
-        st.session_state.chat_history.append({"role": "user", "content": q})
-        with st.spinner("Thinking..."):
-            resp = ai_engine.generate_response(q, get_enhanced_prompt(st.session_state.current_subject, q, ""))
-        st.session_state.chat_history.append({"role": "assistant", "content": resp})
-        db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, q, resp)
-        st.rerun()
 
 def main():
     init_session()
 
-    # Welcome Animation
+    # Welcome Screen
     if st.session_state.show_welcome:
         st.markdown("""
         <div class="welcome-box">
@@ -197,8 +146,17 @@ def main():
     login_block()
     sidebar()
 
-    tabs = st.tabs(["Chat", "Premium", "Admin Center"] if st.session_state.is_admin else ["Chat", "Premium"])
-    with tabs[0]: main_chat()
+    tabs = st.tabs(["Chat", "Premium"] + (["Admin Center"] if st.session_state.is_admin else []))
+    with tabs[0]:
+        st.markdown(f"### {st.session_state.current_subject} Tutor")
+        q = st.text_area("Ask:", height=100)
+        if st.button("Send") and q:
+            st.session_state.chat_history.append({"role": "user", "content": q})
+            with st.spinner("Thinking..."):
+                resp = ai_engine.generate_response(q, get_enhanced_prompt(st.session_state.current_subject, q, ""))
+            st.session_state.chat_history.append({"role": "assistant", "content": resp})
+            db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, q, resp)
+            st.rerun()
     with tabs[1]:
         st.write("### Upgrade to Premium – KES 500/month")
         phone = st.text_input("M-Pesa Phone")
@@ -206,7 +164,7 @@ def main():
         if st.button("Submit Proof"):
             db.add_manual_payment(st.session_state.user_id, phone, code)
             st.success("Submitted!")
-    if st.session_state.is_admin:
+    if st.session_state.is_admin and len(tabs) > 2:
         with tabs[2]: admin_center()
 
 if __name__ == "__main__":
