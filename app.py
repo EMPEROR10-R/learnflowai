@@ -49,13 +49,15 @@ def qr_image(email, secret):
     return buf.getvalue()
 
 def login_user(email, pwd, totp=""):
+    if not email or "@" not in email:
+        return False, "Invalid email", None
     user = db.get_user_by_email(email)
     if not user or not bcrypt.checkpw(pwd.encode(), user["password_hash"].encode()):
-        return False, "Invalid credentials", None
+        return False, "Invalid email or password", None
     if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
         return False, "Invalid 2FA code", None
     db.update_user_activity(user["user_id"])
-    return True, "Success", user
+    return True, "Login successful", user
 
 def welcome_screen():
     st.markdown('<div class="welcome-box"><h1>LearnFlow AI</h1><p>Your Kenyan AI Tutor</p><p>KCPE • KPSEA • KJSEA • KCSE</p></div>', unsafe_allow_html=True)
@@ -74,11 +76,15 @@ def login_block():
     totp = st.text_input("2FA Code", key="totp") if choice == "Login" else ""
 
     if st.button(choice):
-        if choice == "Sign Up":
+        if not email or "@" not in email:
+            st.error("Enter a valid email.")
+        elif len(pwd) < 6:
+            st.error("Password must be 6+ characters.")
+        elif choice == "Sign Up":
             if db.create_user(email, pwd):
-                st.success("Created! Now log in.")
+                st.success("Account created! Now log in.")
             else:
-                st.error("Email exists.")
+                st.error("Email already exists.")
         else:
             ok, msg, u = login_user(email, pwd, totp)
             st.write(msg)

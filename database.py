@@ -38,7 +38,7 @@ def init_db():
     )
     ''')
 
-    # === CHAT HISTORY (FIXED: ai_response, not ai('_response')) ===
+    # === CHAT HISTORY ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS chat_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,14 +117,17 @@ class Database:
 
     # === USER ===
     def create_user(self, email: str, password: str) -> Optional[str]:
+        if not email or "@" not in email or len(password) < 6:
+            return None
         uid = str(uuid.uuid4())
         hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         today = date.today().isoformat()
+        name = email.split("@")[0] if "@" in email else "User"
         try:
             self._c().execute('''
             INSERT INTO users (user_id, email, password_hash, name, streak_days, last_streak_date)
             VALUES (?, ?, ?, ?, 1, ?)
-            ''', (uid, email, hashed, email.split("@")[0], today))
+            ''', (uid, email, hashed, name, today))
             self.commit()
             return uid
         except sqlite3.IntegrityError:
@@ -144,8 +147,11 @@ class Database:
 
     def update_user_activity(self, user_id: str):
         if not user_id: return
-        self._c().execute("UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
-        self.commit()
+        try:
+            self._c().execute("UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
+            self.commit()
+        except:
+            pass  # safe fallback
 
     # === STREAK ===
     def update_streak(self, user_id: str) -> int:
@@ -250,6 +256,7 @@ class Database:
     # === BADGES & CHAT ===
     def add_badge(self, user_id: str, badge: str):
         user = self.get_user(user_id)
+        if not user: return
         badges = json.loads(user.get("badges", "[]"))
         if badge not in badges:
             badges.append(badge)
