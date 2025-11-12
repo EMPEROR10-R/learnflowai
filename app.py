@@ -42,9 +42,6 @@ def init_session():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-    # Force logout on load
-    st.session_state.logged_in = False
-    st.session_state.show_welcome = True
 
 def qr_code(email, secret):
     uri = pyotp.TOTP(secret).provisioning_uri(email, "LearnFlow AI")
@@ -113,16 +110,18 @@ def sidebar():
             for k in list(st.session_state.keys()): del st.session_state[k]
             st.rerun()
 
-def admin_center():
-    st.subheader("Admin Control Center")
-    users = db.get_all_users() if hasattr(db, 'get_all_users') else []
-    for u in users:
-        with st.expander(f"{u['name']} ({u['email']})"):
-            if st.button("Delete", key=f"del_{u['user_id']}"):
-                if u["role"] != "admin":
-                    db.delete_user(u["user_id"])
-                    st.success("Deleted")
-                    st.rerun()
+def main_chat():
+    st.markdown(f"### {st.session_state.current_subject} Tutor")
+    for m in st.session_state.chat_history:
+        st.markdown(f"**{'You' if m['role']=='user' else 'AI'}**: {m['content']}")
+    q = st.text_area("Ask:", height=100)
+    if st.button("Send") and q:
+        st.session_state.chat_history.append({"role": "user", "content": q})
+        with st.spinner("Thinking..."):
+            resp = ai_engine.generate_response(q, get_enhanced_prompt(st.session_state.current_subject, q, ""))
+        st.session_state.chat_history.append({"role": "assistant", "content": resp})
+        db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, q, resp)
+        st.rerun()
 
 def main():
     init_session()
@@ -140,23 +139,16 @@ def main():
         with col:
             if st.button("Start Learning!", type="primary", use_container_width=True):
                 st.session_state.show_welcome = False
-                st.rerun()
-        return
-
+                st.rerun()  # This will reload and go to login_block()
+        # DO NOT RETURN HERE — let script continue to login_block()
+    
+    # Login Block
     login_block()
-    sidebar()
 
+    # After login: show sidebar + chat
+    sidebar()
     tabs = st.tabs(["Chat", "Premium"] + (["Admin Center"] if st.session_state.is_admin else []))
-    with tabs[0]:
-        st.markdown(f"### {st.session_state.current_subject} Tutor")
-        q = st.text_area("Ask:", height=100)
-        if st.button("Send") and q:
-            st.session_state.chat_history.append({"role": "user", "content": q})
-            with st.spinner("Thinking..."):
-                resp = ai_engine.generate_response(q, get_enhanced_prompt(st.session_state.current_subject, q, ""))
-            st.session_state.chat_history.append({"role": "assistant", "content": resp})
-            db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, q, resp)
-            st.rerun()
+    with tabs[0]: main_chat()
     with tabs[1]:
         st.write("### Upgrade to Premium – KES 500/month")
         phone = st.text_input("M-Pesa Phone")
@@ -164,8 +156,6 @@ def main():
         if st.button("Submit Proof"):
             db.add_manual_payment(st.session_state.user_id, phone, code)
             st.success("Submitted!")
-    if st.session_state.is_admin and len(tabs) > 2:
-        with tabs[2]: admin_center()
 
 if __name__ == "__main__":
     main()
