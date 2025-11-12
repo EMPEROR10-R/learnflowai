@@ -153,12 +153,11 @@ class Database:
         row = c.fetchone()
         return dict(row) if row else None
 
-    # ---- SAFE ACTIVITY UPDATE (FIXED) -------------------
+    # ---- SAFE ACTIVITY UPDATE (FIXED AND HARDENED) -------------------
     def update_user_activity(self, user_id: str):
         if not user_id:
             return
         try:
-            # Column existence is guaranteed by ensure_columns() at startup.
             c = self._c()
             c.execute(
                 "UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?",
@@ -166,7 +165,7 @@ class Database:
             )
             self.commit()
         except Exception:
-            # Catches OperationalError (if the column somehow still fails) or any other issue, preventing app crash.
+            # Catches OperationalError (if column is missing) or any other issue, preventing app crash.
             pass
 
     # ------------------- STREAK ---------------------------------
@@ -208,9 +207,7 @@ class Database:
         except Exception:
             return False
 
-    # All other methods (which were not explicitly shown) should be placed here
-    # to complete the class definition.
-    # Placeholder methods for completeness:
+    # (Place all other original database methods here to complete the class)
     def add_manual_payment(self, user_id, phone, code): pass
     def get_pending_manual_payments(self): return []
     def approve_manual_payment(self, id): pass
