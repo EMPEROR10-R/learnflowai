@@ -41,12 +41,10 @@ def init_ai():
         def get(self, key): return "DUMMY_KEY" 
     try:
         k = st.secrets.get("GEMINI_API_KEY")
-    except: # Handle case where st.secrets is not initialized
+    except:
         k = Secrets().get("GEMINI_API_KEY")
         
     if not k: 
-        # Fallback to a warning instead of stop() if secrets aren't crucial for basic demo
-        # st.error("GEMINI_API_KEY missing!"); st.stop()
         pass 
     return AIEngine(k)
 
@@ -79,7 +77,7 @@ except Exception:
 try:
     ai_engine = init_ai()
 except:
-    pass # Already handled by placeholder imports above
+    pass
 
 def init_session():
     defaults = {
@@ -105,7 +103,6 @@ def login_user(email, pwd, totp=""):
         return False, "Invalid email or password.", None
     if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
         return False, "Invalid 2FA code.", None
-    # This function call is safe because the db.update_user_activity method is fixed.
     db.update_user_activity(user["user_id"])
     return True, "Login successful!", user
 
@@ -178,7 +175,6 @@ def pdf_tab():
     st.markdown("### PDF Upload & Analysis")
     uploaded = st.file_uploader("Upload PDF", type="pdf")
     if uploaded:
-        # NOTE: Using read() might cause issues in Streamlit Cloud, adjust as needed.
         txt = ai_engine.extract_text_from_pdf(uploaded.read()) 
         st.success(f"Extracted {len(txt)} characters")
         q = st.text_area("Ask about this PDF")
@@ -298,17 +294,23 @@ def main():
     if st.session_state.is_admin: tabs.append("Admin Dashboard")
     tab_objs = st.tabs(tabs)
 
-    # --- SYNTAX FIX APPLIED HERE ---
-    # Used 'if len(tab_objs) > index: with tab_objs[index]: function()'
+    # === FIXED SYNTAX: Using separate lines for IF and WITH ===
     
     # Static Tabs
-    if len(tab_objs) > 0: with tab_objs[0]: chat_tab()
-    if len(tab_objs) > 1: with tab_objs[1]: pdf_tab()
-    if len(tab_objs) > 2: with tab_objs[2]: progress_tab()
-    if len(tab_objs) > 3: with tab_objs[3]: exam_tab()
-    if len(tab_objs) > 4: with tab_objs[4]: essay_tab()
-    if len(tab_objs) > 5: with tab_objs[5]: premium_tab()
-    if len(tab_objs) > 6: with tab_objs[6]: settings_tab()
+    if len(tab_objs) > 0: 
+        with tab_objs[0]: chat_tab()
+    if len(tab_objs) > 1: 
+        with tab_objs[1]: pdf_tab()
+    if len(tab_objs) > 2: 
+        with tab_objs[2]: progress_tab()
+    if len(tab_objs) > 3: 
+        with tab_objs[3]: exam_tab()
+    if len(tab_objs) > 4: 
+        with tab_objs[4]: essay_tab()
+    if len(tab_objs) > 5: 
+        with tab_objs[5]: premium_tab()
+    if len(tab_objs) > 6: 
+        with tab_objs[6]: settings_tab()
     
     # Dynamic Tabs
     if st.session_state.is_parent and "Parent Dashboard" in tabs:
@@ -320,6 +322,7 @@ def main():
         admin_index = tabs.index("Admin Dashboard")
         if admin_index < len(tab_objs):
             with tab_objs[admin_index]: admin_dashboard()
+
 
 if __name__ == "__main__":
     main()
