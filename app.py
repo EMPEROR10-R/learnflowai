@@ -1,33 +1,26 @@
 # app.py
 import streamlit as st
-import pyotp, qrcode, bcrypt, json, pandas as pd
+import pyotp, qrcode, bcrypt, json
 from io import BytesIO
 from database import Database
 from ai_engine import AIEngine
-from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
+from prompts import SUBJECT_PROMPTS, get_enhanced_prompt
 
-# ----------------------------------------------------------------------
-# Page & CSS
-# ----------------------------------------------------------------------
 st.set_page_config(page_title="LearnFlow AI", page_icon="Kenya", layout="wide")
 st.markdown("""
 <style>
     .main-header {font-size:2.8rem; font-weight:bold;
         background:linear-gradient(135deg,#009E60,#FFD700,#CE1126);
         -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-        text-align:center; animation:fadeInDown 1s;}
-    .streak-badge {background:linear-gradient(135deg,#FF6B6B,#FFE66D);
-        padding:6px 14px; border-radius:20px; color:white; font-weight:bold;}
-    .premium-badge {background:#FFD700; color:#000; padding:4px 10px;
-        border-radius:12px; font-weight:bold;}
+        text-align:center;}
     .welcome-box {background:linear-gradient(135deg,#009E60,#FFD700);
         padding:50px; border-radius:20px; color:white; text-align:center;}
+    .streak-badge {background:linear-gradient(135deg,#FF6B6B,#FFE66D);
+        padding:6px 14px; border-radius:20px; color:white; font-weight:bold;}
+    .premium-badge {background:#FFD700; color:#000; padding:4px 10px; border-radius:12px; font-weight:bold;}
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------------------------------------------------------------
-# Init
-# ----------------------------------------------------------------------
 @st.cache_resource
 def init_db(): return Database()
 @st.cache_resource
@@ -42,15 +35,12 @@ ai_engine = init_ai()
 def init_session():
     defaults = {
         "logged_in": False, "user_id": None, "is_admin": False, "user": None,
-        "show_welcome": True, "show_2fa_setup": False, "temp_2fa_secret": None,
-        "chat_history": [], "current_subject": "Mathematics", "is_parent": False
+        "show_welcome": True, "chat_history": [], "current_subject": "Mathematics",
+        "is_parent": False
     }
     for k, v in defaults.items():
         if k not in st.session_state: st.session_state[k] = v
 
-# ----------------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------------
 def qr_image(email, secret):
     uri = pyotp.TOTP(secret).provisioning_uri(email, "LearnFlow AI")
     qr = qrcode.make(uri)
@@ -64,20 +54,11 @@ def login_user(email, pwd, totp=""):
         return False, "Invalid credentials", None
     if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
         return False, "Invalid 2FA code", None
-    db.update_user_activity(user["user_id"])
+    db.update_user_activity(user["user_id"])  # NOW SAFE
     return True, "Success", user
 
-# ----------------------------------------------------------------------
-# Welcome → Login
-# ----------------------------------------------------------------------
 def welcome_screen():
-    st.markdown("""
-    <div class="welcome-box">
-        <h1>LearnFlow AI</h1>
-        <p>Your Kenyan AI Tutor</p>
-        <p>KCPE • KPSEA • KJSEA • KCSE</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown('<div class="welcome-box"><h1>LearnFlow AI</h1><p>Your Kenyan AI Tutor</p><p>KCPE • KPSEA • KJSEA • KCSE</p></div>', unsafe_allow_html=True)
     _, col, _ = st.columns([1,1,1])
     with col:
         if st.button("Start Learning!", type="primary", use_container_width=True):
@@ -110,9 +91,6 @@ def login_block():
                 st.rerun()
     st.stop()
 
-# ----------------------------------------------------------------------
-# Sidebar
-# ----------------------------------------------------------------------
 def sidebar():
     with st.sidebar:
         st.markdown("## LearnFlow AI")
@@ -120,17 +98,12 @@ def sidebar():
             st.markdown('<span class="premium-badge">PREMIUM</span>', unsafe_allow_html=True)
         streak = db.update_streak(st.session_state.user_id)
         st.markdown(f'<span class="streak-badge">Streak: {streak} days</span>', unsafe_allow_html=True)
-
-        st.session_state.current_subject = st.selectbox(
-            "Subject", list(SUBJECT_PROMPTS.keys())
-        )
+        st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
         if st.button("Logout"):
             for k in st.session_state.keys(): del st.session_state[k]
             st.rerun()
 
-# ----------------------------------------------------------------------
-# Feature Tabs
-# ----------------------------------------------------------------------
+# === TABS ===
 def chat_tab():
     st.markdown(f"### {st.session_state.current_subject} Tutor")
     for m in st.session_state.chat_history:
@@ -140,12 +113,9 @@ def chat_tab():
     if st.button("Send") and q:
         st.session_state.chat_history.append({"role":"user","content":q})
         with st.spinner("Thinking…"):
-            resp = ai_engine.generate_response(
-                q, get_enhanced_prompt(st.session_state.current_subject, q, "")
-            )
+            resp = ai_engine.generate_response(q, get_enhanced_prompt(st.session_state.current_subject, q, ""))
         st.session_state.chat_history.append({"role":"assistant","content":resp})
-        db.add_chat_history(st.session_state.user_id,
-                            st.session_state.current_subject, q, resp)
+        db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, q, resp)
         st.rerun()
 
 def pdf_tab():
@@ -156,11 +126,7 @@ def pdf_tab():
         st.success(f"Extracted {len(txt)} chars")
         q = st.text_area("Ask about this PDF")
         if st.button("Ask") and q:
-            with st.spinner("Analyzing…"):
-                resp = ai_engine.generate_response(
-                    f"Document:\n{txt[:4000]}\n\nQuestion: {q}",
-                    "Answer in 1-2 sentences."
-                )
+            resp = ai_engine.generate_response(f"Document:\n{txt[:4000]}\n\nQuestion: {q}", "Answer in 1-2 sentences.")
             st.markdown(f"**AI:** {resp}")
 
 def progress_tab():
@@ -173,8 +139,8 @@ def progress_tab():
 
 def exam_tab():
     st.markdown("### Exam Prep")
-    exam = st.selectbox("Exam", EXAM_TYPES.keys())
-    subj = st.selectbox("Subject", EXAM_TYPES[exam]["subjects"])
+    exam = st.selectbox("Exam", ["KCPE", "KPSEA", "KJSEA", "KCSE"])
+    subj = st.selectbox("Subject", SUBJECT_PROMPTS.keys())
     n = st.slider("Questions",1,10,5)
     if st.button("Generate"):
         prompt = f"Create {n} {exam} MCQs on {subj} (A-D, one correct)."
@@ -185,7 +151,6 @@ def essay_tab():
     st.markdown("### Essay Grader")
     essay = st.text_area("Paste essay", height=200)
     if st.button("Grade") and essay:
-        # simple placeholder – replace with real grader if you have one
         st.markdown(f"**Score:** 78/100 – Good structure, improve examples.")
 
 def premium_tab():
@@ -196,12 +161,8 @@ def premium_tab():
         db.add_manual_payment(st.session_state.user_id, phone, code)
         st.success("Submitted! Admin will review.")
 
-# ----------------------------------------------------------------------
-# NEW: Settings Tab (2FA + Parent Link)
-# ----------------------------------------------------------------------
 def settings_tab():
     st.header("Settings")
-    # ---- 2FA ----
     st.subheader("Two-Factor Authentication")
     if db.is_2fa_enabled(st.session_state.user_id):
         st.success("2FA Enabled")
@@ -213,36 +174,26 @@ def settings_tab():
         st.info("Enable 2FA (free with Google Authenticator)")
         if st.button("Enable 2FA"):
             secret = db.generate_2fa_secret(st.session_state.user_id)
-            st.image(qr_image(st.session_state.user["email"], secret),
-                     caption="Scan with Authenticator")
+            st.image(qr_image(st.session_state.user["email"], secret), caption="Scan with Authenticator")
             st.code(secret)
-
-    # ---- Parent Link (for child accounts) ----
     if not st.session_state.is_parent and not st.session_state.is_admin:
         st.subheader("Link Parent")
         p_email = st.text_input("Parent Email")
-        p_pass  = st.text_input("Parent Password", type="password")
+        p_pass = st.text_input("Parent Password", type="password")
         if st.button("Link Parent"):
             msg = db.link_parent(st.session_state.user_id, p_email, p_pass)
             st.write(msg)
 
-# ----------------------------------------------------------------------
-# NEW: Parent Dashboard
-# ----------------------------------------------------------------------
 def parent_dashboard():
     st.header("Parent Dashboard")
     children = db.get_children(st.session_state.user_id)
     if not children:
-        st.info("No children linked yet.")
+        st.info("No children linked.")
         return
     for child in children:
         with st.expander(f"**{child.get('name') or child['email']}**"):
-            # placeholder activity – replace with real data if you log it
-            st.write("Activity log coming soon…")
+            st.write("Activity coming soon…")
 
-# ----------------------------------------------------------------------
-# NEW: Admin Dashboard (manual approvals)
-# ----------------------------------------------------------------------
 def admin_dashboard():
     if not st.session_state.is_admin:
         st.error("Access denied.")
@@ -252,8 +203,7 @@ def admin_dashboard():
     df = pd.DataFrame(users)
     if not df.empty:
         df["created_at"] = pd.to_datetime(df["created_at"]).dt.strftime("%Y-%m-%d")
-        st.dataframe(df, use_container_width=True)
-
+        st.dataframe(df)
     st.markdown("### Pending Manual Payments")
     pending = db.get_pending_manual_payments()
     if pending:
@@ -274,26 +224,17 @@ def admin_dashboard():
     else:
         st.info("No pending requests.")
 
-# ----------------------------------------------------------------------
-# Main
-# ----------------------------------------------------------------------
 def main():
     init_session()
-
     if st.session_state.show_welcome:
         welcome_screen()
         return
-
     login_block()
     sidebar()
 
-    # Determine which tabs to show
     tabs = ["Chat Tutor","PDF Upload","Progress","Exam Prep","Essay Grader","Premium","Settings"]
-    if st.session_state.is_parent:
-        tabs.append("Parent Dashboard")
-    if st.session_state.is_admin:
-        tabs.append("Admin Dashboard")
-
+    if st.session_state.is_parent: tabs.append("Parent Dashboard")
+    if st.session_state.is_admin: tabs.append("Admin Dashboard")
     tab_objs = st.tabs(tabs)
 
     with tab_objs[0]: chat_tab()
