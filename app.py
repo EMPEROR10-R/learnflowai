@@ -33,7 +33,34 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 @st.cache_resource
-def init_db(): return Database()
+def init_db():
+    try:
+        db = Database()
+        return db
+    except Exception as e:
+        st.error("Database connection failed. Check logs.")
+        print(f"DB Init Error: {e}")
+        class DummyDB:
+            def get_user_by_email(self, email): return None
+            def create_user(self, email, pwd): return None
+            def update_user_activity(self, user_id): pass
+            def is_2fa_enabled(self, user_id): return False
+            def verify_2fa_code(self, user_id, code): return True
+            def check_premium(self, user_id): return False
+            def update_streak(self, user_id): return 1
+            def add_chat_history(self, *args): pass
+            def get_user(self, user_id): return {"total_queries": 0, "streak_days": 1, "badges": "[]"}
+            def get_children(self, user_id): return []
+            def link_parent(self, *args): return "Error"
+            def generate_2fa_secret(self, user_id): return "SECRET123"
+            def disable_2fa(self, user_id): pass
+            def add_manual_payment(self, *args): pass
+            def get_pending_manual_payments(self): return []
+            def approve_manual_payment(self, id): pass
+            def reject_manual_payment(self, id): pass
+            def get_all_users(self): return []
+        return DummyDB()
+
 @st.cache_resource
 def init_ai():
     # Placeholder for secrets handling
@@ -49,30 +76,7 @@ def init_ai():
     return AIEngine(k)
 
 # Initialize DB and AI engine
-try:
-    db = init_db()
-except Exception:
-    st.warning("Database initialization failed. Using dummy DB methods.")
-    class DummyDB:
-        def get_user_by_email(self, email): return {"user_id": "1", "password_hash": bcrypt.hashpw(b'password'.encode(), bcrypt.gensalt()).decode(), "role": "user", "parent_id": None, "email": email}
-        def is_2fa_enabled(self, user_id): return False
-        def verify_2fa_code(self, user_id, code): return True
-        def update_user_activity(self, user_id): pass
-        def check_premium(self, user_id): return False
-        def update_streak(self, user_id): return 1
-        def create_user(self, email, pwd): return "1"
-        def get_user(self, user_id): return {"total_queries": 0, "streak_days": 1, "badges": "[]", "email": "test@user.com"}
-        def add_chat_history(self, user_id, subject, query, response): pass
-        def get_children(self, user_id): return []
-        def link_parent(self, user_id, email, password): return "Linked"
-        def generate_2fa_secret(self, user_id): return "secret"
-        def disable_2fa(self, user_id): pass
-        def add_manual_payment(self, user_id, phone, code): pass
-        def get_all_users(self): return [{"user_id": "1", "email": "test@user.com", "created_at": "2024-01-01", "role": "user"}]
-        def get_pending_manual_payments(self): return []
-        def approve_manual_payment(self, id): pass
-        def reject_manual_payment(self, id): pass
-    db = DummyDB()
+db = init_db()
 
 try:
     ai_engine = init_ai()

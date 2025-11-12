@@ -228,7 +228,7 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
         }
 
     # --------------------------------------------------------------------------
-    # EXAM / GRADING / SUMMARY (Optional – keep or remove)
+    # EXAM / GRADING / SUMMARY
     # --------------------------------------------------------------------------
     def generate_exam_questions(self, subject, exam_type, num_questions):
         return self.generate_mcq_questions(subject, num_questions)
