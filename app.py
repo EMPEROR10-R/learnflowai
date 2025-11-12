@@ -56,7 +56,7 @@ def login_user(email, pwd, totp=""):
         return False, "Invalid email or password.", None
     if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
         return False, "Invalid 2FA code.", None
-    db.update_user_activity(user["user_id"])  # SAFE: wrapped in try/except in DB
+    db.update_user_activity(user["user_id"])
     return True, "Login successful!", user
 
 def welcome_screen():
@@ -206,8 +206,8 @@ def admin_dashboard():
         return
     st.markdown("## Admin Dashboard")
     users = db.get_all_users()
-    df = pd.DataFrame(users)
-    if not df.empty:
+    if users:
+        df = pd.DataFrame(users)
         df["created_at"] = pd.to_datetime(df["created_at"]).dt.strftime("%Y-%m-%d")
         st.dataframe(df, use_container_width=True)
     st.markdown("### Pending Manual Payments")
