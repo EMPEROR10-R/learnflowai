@@ -12,10 +12,10 @@ import fitz  # PyMuPDF - pip install pymupdf
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
 
-# Chat / streaming – stable, fast, free tier
-GEMINI_CHAT_MODEL = "gemini-2.5-flash"
+# Chat / streaming – stable, fast, free tier (corrected to valid model)
+GEMINI_CHAT_MODEL = "gemini-1.5-flash"
 
-# Structured JSON (exam, grading) – reliable fallback
+# Structured JSON (exam, grading) – reliable fallback (corrected to valid model)
 GEMINI_STRUCTURED_MODEL = "gemini-1.5-flash"
 
 # ==============================================================================
@@ -202,12 +202,22 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
         Returns: correct count, total, percentage, detailed results
         """
         correct = 0
+        total_score = 0  # For partial credit
         results = []
-
         for i, q in enumerate(questions):
-            user_ans = user_answers.get(i, "")
-            correct_ans = q["correct_answer"]
+            user_ans = user_answers.get(i, "").strip()
+            correct_ans = q["correct_answer"].strip()
             is_correct = user_ans == correct_ans
+            score = 100 if is_correct else 0
+            # Optional: AI partial credit if not exact
+            if not is_correct and user_ans:
+                partial_prompt = f"Is '{user_ans}' partially correct compared to '{correct_ans}'? Score 0-50."
+                partial_resp = self.generate_response(partial_prompt, "Quick partial grader.")
+                try:
+                    score = int(partial_resp.split()[0])
+                except:
+                    score = 0
+            total_score += score
             if is_correct:
                 correct += 1
             results.append({
@@ -215,11 +225,10 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
                 "user_answer": user_ans,
                 "correct_answer": correct_ans,
                 "is_correct": is_correct,
+                "score": score,
                 "feedback": q.get("feedback", "No feedback.")
             })
-
-        percentage = (correct / len(questions)) * 100 if questions else 0
-
+        percentage = (total_score / (len(questions) * 100)) * 100 if questions else 0
         return {
             "correct": correct,
             "total": len(questions),
@@ -234,9 +243,37 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
         return self.generate_mcq_questions(subject, num_questions)
 
     def grade_short_answer(self, question, model_answer, user_answer):
-        is_correct = len(user_answer) > 15
-        feedback = "Correct!" if is_correct else "Add more detail."
-        return {"is_correct": is_correct, "feedback": feedback}
+        prompt = f"""
+Compare user answer to model answer for question: {question}
+Model: {model_answer}
+User: {user_answer}
+
+Score 0-100 on accuracy, completeness. Output JSON: {{"score": int, "feedback": "Explanation."}}
+"""
+        try:
+            response = self.generate_response(prompt, "You are a precise short-answer grader. Focus on key facts and semantics.")
+            json_str = response.strip().replace("```json", "").replace("```", "")
+            result = json.loads(json_str)
+            return result
+        except:
+            return {"score": 50 if len(user_answer) > 15 else 0, "feedback": "Basic check: Add more content."}
+
+    def grade_essay(self, essay: str, rubric: str) -> Dict:
+        """Grade essay using Gemini for accuracy."""
+        prompt = f"""
+Grade this essay on a scale of 0-100 based on the rubric: {rubric}
+Essay: {essay}
+
+Output JSON: {{"score": int, "feedback": "Detailed strengths/weaknesses."}}
+"""
+        try:
+            response = self.generate_response(prompt, "You are an expert essay grader for Kenyan curriculum. Be fair, detailed, and constructive.")
+            json_str = response.strip().replace("```json", "").replace("```", "")
+            result = json.loads(json_str)
+            return result
+        except Exception as e:
+            print(f"Essay grading error: {e}")
+            return {"score": 50, "feedback": "Fallback: Average effort; improve details."}
 
     def summarize_text_hf(self, text: str) -> str:
         return "Summary not available (HF disabled)."

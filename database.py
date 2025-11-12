@@ -3,7 +3,7 @@ import sqlite3
 import bcrypt
 import json
 import uuid
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import pyotp
 from typing import Optional, List, Dict
 
@@ -27,7 +27,12 @@ def ensure_columns():
         ("is_premium",       "INTEGER DEFAULT 0"),
         ("twofa_secret",     "TEXT"),
         ("total_queries",    "INTEGER DEFAULT 0"),
-        ("created_at",       "TEXT DEFAULT CURRENT_TIMESTAMP")
+        ("created_at",       "TEXT DEFAULT CURRENT_TIMESTAMP"),
+        ("profile_pic",      "BLOB"),
+        ("theme",            "TEXT DEFAULT 'light'"),
+        ("brightness",       "INTEGER DEFAULT 100"),
+        ("font",             "TEXT DEFAULT 'sans-serif'"),
+        ("discount",         "REAL DEFAULT 0.0")
     ]
     for col, typ in required:
         try:
@@ -57,7 +62,12 @@ def init_db():
         badges TEXT DEFAULT '[]',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         last_active TEXT DEFAULT CURRENT_TIMESTAMP,
-        twofa_secret TEXT
+        twofa_secret TEXT,
+        profile_pic BLOB,
+        theme TEXT DEFAULT 'light',
+        brightness INTEGER DEFAULT 100,
+        font TEXT DEFAULT 'sans-serif',
+        discount REAL DEFAULT 0.0
     )
     ''')
 
@@ -89,6 +99,16 @@ def init_db():
         mpesa_code TEXT,
         status TEXT DEFAULT 'pending',
         submitted_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS scores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        category TEXT,  -- 'exam' or 'essay'
+        score REAL,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
     )
     ''')
 
@@ -168,7 +188,6 @@ class Database:
             print(f"Get user error: {e}")
             return None
 
-    # ---- SAFE ACTIVITY UPDATE (FIXED) -------------------
     def update_user_activity(self, user_id: str):
         if not user_id:
             return
@@ -196,7 +215,6 @@ class Database:
         except Exception as e:
             print(f"Activity update error: {e}")
 
-    # ------------------- STREAK ---------------------------------
     def update_streak(self, user_id: str) -> int:
         if not user_id:
             return 0
@@ -218,9 +236,11 @@ class Database:
                 return streak
             elif last == yesterday:
                 streak += 1
+                if streak == 3: self.add_badge(user_id, "streak_3")
+                if streak == 7: self.add_badge(user_id, "streak_7")
+                if streak == 30: self.add_badge(user_id, "streak_30")
             else:
                 streak = 1
-
             c.execute("UPDATE users SET streak_days = ?, last_streak_date = ? WHERE user_id = ?", (streak, today, user_id))
             self.commit()
             return streak
@@ -228,7 +248,6 @@ class Database:
             print(f"Streak update error: {e}")
             return 0
 
-    # ------------------- PREMIUM --------------------------------
     def check_premium(self, user_id: str) -> bool:
         if not user_id:
             return False
@@ -240,7 +259,6 @@ class Database:
         except Exception:
             return False
 
-    # === STUBS (implement as needed) ===
     def add_manual_payment(self, user_id, phone, code):
         try:
             c = self._c()
@@ -264,7 +282,7 @@ class Database:
             c.execute("SELECT user_id FROM manual_payments WHERE id = ?", (id,))
             row = c.fetchone()
             if row:
-                c.execute("UPDATE users SET is_premium = 1 WHERE user_id = ?", (row["user_id"],))
+                self.toggle_premium(row["user_id"], True)
             self.commit()
         except Exception as e:
             print(f"Approve error: {e}")
@@ -352,3 +370,101 @@ class Database:
             return [dict(row) for row in c.fetchall()]
         except Exception:
             return []
+
+    def toggle_premium(self, user_id, enable: bool):
+        try:
+            c = self._c()
+            c.execute("UPDATE users SET is_premium = ? WHERE user_id = ?", (1 if enable else 0, user_id))
+            self.commit()
+        except Exception as e:
+            print(f"Toggle premium error: {e}")
+
+    def revoke_user(self, user_id):
+        try:
+            c = self._c()
+            c.execute("UPDATE users SET badges = '[]', streak_days = 0 WHERE user_id = ?", (user_id,))
+            c.execute("DELETE FROM scores WHERE user_id = ?", (user_id,))
+            self.commit()
+        except Exception as e:
+            print(f"Revoke user error: {e}")
+
+    def add_score(self, user_id, category, score):
+        try:
+            c = self._c()
+            c.execute("INSERT INTO scores (user_id, category, score) VALUES (?, ?, ?)", (user_id, category, score))
+            self.commit()
+        except Exception as e:
+            print(f"Add score error: {e}")
+
+    def get_leaderboard(self, category):
+        try:
+            c = self._c()
+            c.execute("""
+            SELECT u.email, SUM(s.score) as total_score
+            FROM scores s JOIN users u ON s.user_id = u.user_id
+            WHERE s.category = ?
+            GROUP BY s.user_id
+            ORDER BY total_score DESC
+            LIMIT 10
+            """, (category,))
+            return [{"email": row["email"], "score": row["total_score"]} for row in c.fetchall()]
+        except Exception:
+            return []
+
+    def get_monthly_leaders(self):
+        # Simulate getting top leaders for last month
+        last_month = (datetime.now() - timedelta(days=30)).isoformat()
+        try:
+            c = self._c()
+            c.execute("""
+            SELECT user_id, category, SUM(score) as total
+            FROM scores
+            WHERE timestamp > ?
+            GROUP BY user_id, category
+            ORDER BY category, total DESC
+            """, (last_month,))
+            # Get top per category
+            leaders = {}
+            for row in c.fetchall():
+                cat = row["category"]
+                if cat not in leaders:
+                    leaders[cat] = row["user_id"]
+            return [(uid, cat) for cat, uid in leaders.items()]
+        except:
+            return []
+
+    def apply_discount(self, user_id, discount):
+        try:
+            c = self._c()
+            c.execute("UPDATE users SET discount = ? WHERE user_id = ?", (discount, user_id))
+            self.commit()
+        except Exception as e:
+            print(f"Apply discount error: {e}")
+
+    def add_badge(self, user_id, badge):
+        try:
+            c = self._c()
+            c.execute("SELECT badges FROM users WHERE user_id = ?", (user_id,))
+            row = c.fetchone()
+            badges = json.loads(row["badges"]) if row else []
+            if badge not in badges:
+                badges.append(badge)
+                c.execute("UPDATE users SET badges = ? WHERE user_id = ?", (json.dumps(badges), user_id))
+                self.commit()
+        except Exception as e:
+            print(f"Add badge error: {e}")
+
+    def update_settings(self, user_id, settings: Dict):
+        try:
+            c = self._c()
+            query = "UPDATE users SET "
+            params = []
+            for k, v in settings.items():
+                query += f"{k} = ?, "
+                params.append(v)
+            query = query.rstrip(", ") + " WHERE user_id = ?"
+            params.append(user_id)
+            c.execute(query, params)
+            self.commit()
+        except Exception as e:
+            print(f"Update settings error: {e}")
