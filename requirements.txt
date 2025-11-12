@@ -1,1 +1,1 @@
-"streamlit==1.46.1\npandas==2.2.3\nbcrypt==4.2.0\npyotp==2.9.0\nqrcode[pil]==7.4.2\npymupdf==1.24.10\nrequests==2.32.3"  
+"streamlit==1.38.0\ngoogle-generativeai==0.8.3\nPyPDF2==3.0.1\nnltk==3.8.1\ngoogletrans==4.0.0rc1\nplotly==5.24.1\nmatplotlib==3.9.2\nstripe==11.1.0\nrequests==2.32.3\npymupdf==1.24.10\nbcrypt==4.2.0\ngtts==2.5.3\npandas==2.2.3\npyotp==2.9.0\nqrcode==7.4.2\nPillow==10.4.0\npyjwt==2.9.0\nreportlab==4.2.5"  
