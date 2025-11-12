@@ -18,6 +18,7 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
 
+    # === USERS TABLE ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
@@ -38,44 +39,91 @@ def init_db():
     )
     ''')
 
-    # Other tables...
-    tables = [
-        "chat_history", "pdf_uploads", "manual_payments", "quiz_results"
-    ]
-    for table in tables:
-        c.execute(f"CREATE TABLE IF NOT EXISTS {table} (...)")  # Simplified
+    # === CHAT HISTORY ===
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS chat_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        subject TEXT,
+        user_query TEXT,
+        ai_response TEXT,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (user_id)
+    )
+    ''')
 
-    # Add missing columns
-    columns = [
+    # === PDF UPLOADS ===
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS pdf_uploads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        filename TEXT,
+        upload_date TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (user_id)
+    )
+    ''')
+
+    # === MANUAL PAYMENTS ===
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS manual_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        phone TEXT,
+        mpesa_code TEXT,
+        status TEXT DEFAULT 'pending',
+        submitted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (user_id)
+    )
+    ''')
+
+    # === QUIZ RESULTS ===
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS quiz_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        subject TEXT,
+        exam_type TEXT,
+        score INTEGER,
+        total INTEGER,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (user_id)
+    )
+    ''')
+
+    # === ADD MISSING COLUMNS ===
+    columns_to_add = [
         ("users", "last_active", "TEXT"),
         ("users", "twofa_secret", "TEXT"),
         ("users", "badges", "TEXT DEFAULT '[]'"),
         ("users", "premium_until", "TEXT"),
-        ("users", "is_premium", "INTEGER DEFAULT 0")
+        ("users", "is_premium", "INTEGER DEFAULT 0"),
+        ("users", "parent_id", "TEXT")
     ]
-    for table, col, typ in columns:
-        try:
-            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
-        except:
-            pass
 
-    # Admin
+    for table, col, definition in columns_to_add:
+        try:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {definition}")
+        except sqlite3.OperationalError:
+            pass  # Already exists
+
+    # === CREATE ADMIN ===
     c.execute("SELECT 1 FROM users WHERE email = ?", ("kingmumo15@gmail.com",))
     if not c.fetchone():
         hashed = bcrypt.hashpw("@Yoounruly10".encode(), bcrypt.gensalt()).decode()
         c.execute(
             "INSERT INTO users (user_id, email, password_hash, name, role) VALUES (?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), "kingmumo15@gmail.com", hashed, "Admin", "admin")
+            (str(uuid.uuid4()), "kingmumo15@gmail.com", hashed, "Admin King", "admin")
         )
 
     conn.commit()
     conn.close()
 
+# Run on import
 init_db()
 
 class Database:
     def __init__(self):
-        self.conn = get_db()  # Persistent connection
+        self.conn = get_db()
 
     def _cursor(self):
         return self.conn.cursor()
@@ -149,7 +197,12 @@ class Database:
 
     def get_pending_manual_payments(self):
         c = self._cursor()
-        c.execute("SELECT mp.id, mp.mpesa_code, u.name FROM manual_payments mp JOIN users u ON mp.user_id = u.user_id WHERE mp.status = 'pending'")
+        c.execute("""
+            SELECT mp.id, mp.mpesa_code, mp.phone, u.name, u.email
+            FROM manual_payments mp
+            JOIN users u ON mp.user_id = u.user_id
+            WHERE mp.status = 'pending'
+        """)
         return [dict(row) for row in c.fetchall()]
 
     def approve_manual_payment(self, payment_id: int):
@@ -158,7 +211,7 @@ class Database:
         row = c.fetchone()
         if row:
             user_id = row["user_id"]
-            c.execute("UPDATE users SET is_premium = 1 WHERE user_id = ?", (user_id,))
+            c.execute("UPDATE users SET is_premium = 1, premium_until = date('now', '+30 days') WHERE user_id = ?", (user_id,))
             c.execute("UPDATE manual_payments SET status = 'approved' WHERE id = ?", (payment_id,))
             self.commit()
             return True
@@ -169,7 +222,7 @@ class Database:
         c.execute("UPDATE manual_payments SET status = 'rejected' WHERE id = ?", (payment_id,))
         self.commit()
 
-    # === CHAT ===
+    # === CHAT & LIMITS ===
     def add_chat_history(self, user_id: str, subject: str, query: str, response: str):
         c = self._cursor()
         c.execute("INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?, ?, ?, ?)", (user_id, subject, query, response))
@@ -191,7 +244,8 @@ class Database:
         c = self._cursor()
         c.execute("SELECT last_streak_date, streak_days FROM users WHERE user_id = ?", (user_id,))
         row = c.fetchone()
-        if not row: return 0
+        if not row:
+            return 0
         last_date, streak = row["last_streak_date"], row["streak_days"] or 0
         today = date.today().isoformat()
         if last_date == today:
