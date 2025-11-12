@@ -38,14 +38,14 @@ def init_db():
     )
     ''')
 
-    # === CHAT HISTORY ===
+    # === CHAT HISTORY (FIXED: ai_response, not ai('_response')) ===
     c.execute('''
     CREATE TABLE IF NOT EXISTS chat_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
         subject TEXT,
         user_query TEXT,
-        ai('_response') TEXT,
+        ai_response TEXT,
         timestamp TEXT DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -72,7 +72,7 @@ def init_db():
     )
     ''')
 
-    # === AUTO-ADD MISSING COLUMNS (FIXES CRASH) ===
+    # === AUTO-ADD MISSING COLUMNS ===
     columns_to_add = [
         ("last_active", "TEXT DEFAULT CURRENT_TIMESTAMP"),
         ("parent_id", "TEXT"),
@@ -86,7 +86,7 @@ def init_db():
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
-            pass
+            pass  # already exists
 
     # === CREATE ADMIN ===
     c.execute("SELECT 1 FROM users WHERE email = ?", ("kingmumo15@gmail.com",))

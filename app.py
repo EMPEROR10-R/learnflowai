@@ -54,7 +54,7 @@ def login_user(email, pwd, totp=""):
         return False, "Invalid credentials", None
     if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
         return False, "Invalid 2FA code", None
-    db.update_user_activity(user["user_id"])  # NOW SAFE
+    db.update_user_activity(user["user_id"])
     return True, "Success", user
 
 def welcome_screen():
