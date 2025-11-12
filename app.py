@@ -5,18 +5,13 @@ import bcrypt
 import pyotp
 import qrcode
 import pandas as pd
-import matplotlib.pyplot as plt
 from io import BytesIO
 from database import Database
 from ai_engine import AIEngine
 from prompts import SUBJECT_PROMPTS, BADGES
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet
 
 # =============================================
-# PAGE CONFIG & HIDE BRANDING
+# 1. PAGE CONFIG & HIDE BRANDING
 # =============================================
 st.set_page_config(page_title="LearnFlow AI", layout="wide", menu_items=None)
 st.markdown("""
@@ -28,29 +23,35 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================
-# SAFE INIT
+# 2. SAFE INIT (NO CRASH)
 # =============================================
-@st.cache_resource
-def get_db():
-    try: return Database()
+def init_app():
+    try:
+        db = Database()
     except Exception as e:
-        st.error("Database error – run `python fix_db.py` locally first.")
-        st.code(str(e)); st.stop()
+        st.error("Database failed. Run `python fix_db.py` locally.")
+        st.code(f"Error: {e}")
+        st.stop()
 
-@st.cache_resource
-def get_ai():
     key = st.secrets.get("GEMINI_API_KEY", "")
     if not key:
-        st.error("GEMINI_API_KEY missing! Add in Secrets.")
-        st.info("Get key: https://aistudio.google.com/app/apikey")
+        st.error("GEMINI_API_KEY missing!")
+        st.info("Add in Streamlit Cloud → Settings → Secrets")
         st.stop()
-    return AIEngine(key)
 
-db = get_db()
-ai = get_ai()
+    try:
+        ai = AIEngine(key)
+    except Exception as e:
+        st.error("AI Engine failed.")
+        st.code(f"Error: {e}")
+        st.stop()
+
+    return db, ai
+
+db, ai = init_app()
 
 # =============================================
-# APPLY SETTINGS
+# 3. APPLY SETTINGS
 # =============================================
 def apply_settings():
     font = st.session_state.get("font_size", 16)
@@ -63,7 +64,7 @@ def apply_settings():
     """, unsafe_allow_html=True)
 
 # =============================================
-# WELCOME
+# 4. WELCOME PAGE
 # =============================================
 def welcome():
     st.markdown("""
@@ -88,7 +89,7 @@ def welcome():
         st.rerun()
 
 # =============================================
-# AUTH
+# 5. AUTH PAGE
 # =============================================
 def auth():
     st.markdown("<h1 style='text-align:center;color:#00d4b1;'>Welcome Back!</h1>", unsafe_allow_html=True)
@@ -101,8 +102,12 @@ def auth():
             totp = st.text_input("2FA Code (if enabled)")
             if st.form_submit_button("Login"):
                 ok, msg = login_user(email.lower(), pwd, totp)
-                if ok: st.success("Logged in!"); time.sleep(1); st.rerun()
-                else: st.error(msg)
+                if ok:
+                    st.success("Logged in!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(msg)
 
     with signup_tab:
         with st.form("signup_form"):
@@ -119,17 +124,23 @@ def auth():
                     st.balloons()
 
 # =============================================
-# LOGIN LOGIC
+# 6. LOGIN LOGIC
 # =============================================
 def login_user(email: str, password: str, totp_code: str = ""):
     user = db.get_user_by_email(email)
-    if not user: return False, "User not found"
+    if not user:
+        return False, "User not found"
+
     stored = user["password_hash"]
-    if isinstance(stored, str): stored = stored.encode()
-    if not bcrypt.checkpw(password.encode(), stored): return False, "Wrong password"
+    if isinstance(stored, str):
+        stored = stored.encode()
+    if not bcrypt.checkpw(password.encode(), stored):
+        return False, "Wrong password"
+
     if user.get("two_fa_secret"):
         if not totp_code or not pyotp.TOTP(user["two_fa_secret"]).verify(totp_code):
-            return False, "Invalid 2FA"
+            return False, "Invalid 2FA code"
+
     st.session_state.update({
         "logged_in": True,
         "user_id": user["user_id"],
@@ -141,13 +152,13 @@ def login_user(email: str, password: str, totp_code: str = ""):
     return True, ""
 
 # =============================================
-# ADMIN CENTER
+# 7. ADMIN CENTER
 # =============================================
 def admin_control_center():
     st.title("ADMIN CONTROL CENTER")
     st.success("Welcome KingMumo!")
 
-    t1, t2, t3, t4 = st.tabs(["Pending Payments", "All Users", "Revenue", "Leaderboard"])
+    t1, t2, t3 = st.tabs(["Pending Payments", "Users", "Revenue"])
 
     with t1:
         payments = db.get_pending_payments()
@@ -156,30 +167,24 @@ def admin_control_center():
         else:
             for p in payments:
                 with st.expander(f"{p['name']} – {p['phone']} – KSh 500"):
-                    st.write(f"**M-Pesa Ref:** `{p['mpesa_code']}`")
+                    st.write(f"**Ref:** `{p['mpesa_code']}`")
                     st.write(f"**Phone:** {p['phone']}")
                     c1, c2 = st.columns(2)
-                    if c1.button("APPROVE", key=f"app_{p['id']}"):
+                    if c1.button("APPROVE", key=f"a{p['id']}"):
                         db.approve_payment(p["id"])
                         st.success("Approved!"); st.rerun()
-                    if c2.button("Reject", key=f"rej_{p['id']}"):
+                    if c2.button("Reject", key=f"r{p['id']}"):
                         db.reject_payment(p["id"]); st.rerun()
 
     with t2:
         users = db.get_all_users()
-        st.dataframe([{"Name": u["name"], "Email": u["email"], "Role": u["role"], "Premium": "Yes" if u["is_premium"] else "No"} for u in users], use_container_width=True)
+        st.dataframe([{"Name": u["name"], "Email": u["email"], "Premium": "Yes" if u["is_premium"] else "No"} for u in users], use_container_width=True)
 
     with t3:
-        total = db.get_revenue()
-        st.metric("Total Revenue", f"KSh {total}")
-        st.bar_chart(db.get_monthly_revenue())
-
-    with t4:
-        for i, e in enumerate(db.get_leaderboard(20)):
-            st.write(f"**#{i+1}** {e['name']} — {e['total_score']} pts")
+        st.metric("Revenue", f"KSh {db.get_revenue()}")
 
 # =============================================
-# SETTINGS (2FA for ALL)
+# 8. SETTINGS (2FA for ALL)
 # =============================================
 def settings_page():
     st.title("Settings")
@@ -189,7 +194,7 @@ def settings_page():
 
         user = db.get_user_by_email(st.session_state.user_email)
         has_2fa = bool(user.get("two_fa_secret"))
-        enable_2fa = st.checkbox("Enable 2-Factor Authentication", value=has_2fa)
+        enable_2fa = st.checkbox("Enable 2FA", value=has_2fa)
 
         qr_img = None
         if enable_2fa and not has_2fa:
@@ -200,10 +205,10 @@ def settings_page():
             st.session_state._temp_2fa = secret
 
         if qr_img:
-            st.image(qr_img, caption="Scan with Google Authenticator")
-            st.info("Save to activate 2FA.")
+            st.image(qr_img, caption="Scan with Authenticator")
+            st.info("Save to activate.")
 
-        if st.form_submit_button("Save Settings"):
+        if st.form_submit_button("Save"):
             if enable_2fa and not has_2fa:
                 db.enable_2fa(st.session_state.user_id, st.session_state._temp_2fa)
                 del st.session_state._temp_2fa
@@ -212,21 +217,28 @@ def settings_page():
             st.success("Saved!"); time.sleep(1); st.rerun()
 
 # =============================================
-# MAIN APP – Dashboard for ALL (Admin = Unlimited)
+# 9. MAIN APP – Dashboard (Admin = Unlimited)
 # =============================================
 def main_app():
     apply_settings()
 
     # Sidebar
     st.sidebar.success(f"Welcome {st.session_state.user_name}!")
-    if st.sidebar.button("Dashboard"): st.session_state.page = "dashboard"
-    if st.sidebar.button("Settings"): st.session_state.page = "settings"
+
+    if st.sidebar.button("Dashboard"):
+        st.session_state.page = "dashboard"
+    if st.sidebar.button("Settings"):
+        st.session_state.page = "settings"
     if st.sidebar.button("Logout"):
-        st.session_state.clear()
+        # SAFE LOGOUT
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.session_state.page = "auth"
         st.rerun()
+
     if st.session_state.is_admin:
-        if st.sidebar.button("Admin Centre"): st.session_state.page = "admin_center"
+        if st.sidebar.button("Admin Centre"):
+            st.session_state.page = "admin_center"
 
     # Routing
     if st.session_state.get("page") == "admin_center":
@@ -234,60 +246,25 @@ def main_app():
     if st.session_state.get("page") == "settings":
         settings_page(); return
 
-    # === DASHBOARD (same for admin & premium) ===
+    # DASHBOARD
     st.title("Dashboard")
     if st.session_state.is_admin:
-        st.success("**Unlimited Days & Usage**")
+        st.success("**Unlimited Access**")
     elif st.session_state.is_premium:
-        st.info("Premium – Higher Quotas")
+        st.info("Premium User")
     else:
         st.warning("Upgrade to Premium!")
 
-    # Leaderboard
-    st.markdown("### Leaderboard (Top 5)")
-    board = db.get_leaderboard(5)
-    for i, e in enumerate(board):
-        st.write(f"**#{i+1}** {e['name']} — {e['total_score']} pts")
-
-    # Badges
-    my_badges = db.get_user_badges(st.session_state.user_id)
-    if my_badges:
-        st.markdown("### My Badges")
-        st.write(", ".join([BADGES.get(b, b) for b in my_badges]))
-
-    # CSV Upload
-    st.markdown("### CSV Analysis")
-    csv_file = st.file_uploader("Upload CSV", type="csv")
-    if csv_file:
-        df = pd.read_csv(csv_file)
-        st.dataframe(df.head())
-        st.dataframe(df.describe())
-        if st.button("Export PDF"):
-            buf = generate_csv_pdf(df, "", "")
-            st.download_button("Download", buf, "report.pdf", "application/pdf")
-
-    # Subject + Mode
     subject = st.sidebar.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
     mode = st.sidebar.radio("Mode", ["Chat", "Quiz"], horizontal=True)
-    if mode == "Quiz": show_quiz_mode(subject)
-    else: show_chat_mode(subject)
+    if mode == "Quiz":
+        show_quiz_mode(subject)
+    else:
+        show_chat_mode(subject)
 
 # =============================================
-# PDF & QUIZ
+# 10. QUIZ & CHAT
 # =============================================
-def generate_csv_pdf(df, q, i):
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-    elements = [Paragraph("CSV Report", styles['Title'])]
-    data = [df.columns.tolist()] + df.values.tolist()
-    table = Table(data)
-    table.setStyle(TableStyle([('GRID', (0,0), (-1,-1), 1, colors.black)]))
-    elements.append(table)
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
-
 def show_quiz_mode(subject):
     if st.button("Start Quiz"):
         qs = ai.generate_mcq_questions(subject, 5)
@@ -316,12 +293,17 @@ def show_chat_mode(subject):
             st.write(resp)
 
 # =============================================
-# ROUTER
+# 11. ROUTER
 # =============================================
 if "page" not in st.session_state:
     st.session_state.page = "welcome"
 
-if st.session_state.page == "welcome": welcome()
-elif st.session_state.page == "auth": auth()
-elif st.session_state.get("logged_in"): main_app()
-else: st.session_state.page = "auth"; st.rerun()
+if st.session_state.page == "welcome":
+    welcome()
+elif st.session_state.page == "auth":
+    auth()
+elif st.session_state.get("logged_in"):
+    main_app()
+else:
+    st.session_state.page = "auth"
+    st.rerun()
