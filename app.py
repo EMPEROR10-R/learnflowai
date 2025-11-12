@@ -111,27 +111,24 @@ def get_2fa_qr_code(email: str, secret: str) -> BytesIO:
     return buf
 
 # ----------------------------------------------------------------------
-# Login / Signup Functions (FIXED: user_id guaranteed)
+# Login / Signup Functions (FIXED: twofa_secret)
 # ----------------------------------------------------------------------
 def login_user(email: str, password: str, totp_code: str = ""):
     user = db.get_user_by_email(email)
     if not user:
         return False, "Invalid email or password.", None
 
-    # Ensure password_hash exists
     if "password_hash" not in user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
         return False, "Invalid email or password.", None
 
-    # 2FA Check
-    if user.get("2fa_secret"):
+    # 2FA Check (FIXED: twofa_secret)
+    if user.get("twofa_secret"):
         if not totp_code:
             return False, "2FA code required.", None
-        if not pyotp.TOTP(user["2fa_secret"]).verify(totp_code):
+        if not pyotp.TOTP(user["twofa_secret"]).verify(totp_code):
             return False, "Invalid 2FA code.", None
 
-    # Update activity
-    db.update_user_activity(user["user_id"])  # ← user_id now guaranteed
-
+    db.update_user_activity(user["user_id"])
     return True, "Login successful!", user
 
 def signup_user(email: str, password: str):
@@ -180,9 +177,9 @@ def login_signup_block():
                 st.session_state.logged_in = True
                 st.rerun()
 
-    # 2FA Setup
+    # 2FA Setup (FIXED: twofa_secret)
     if st.session_state.logged_in and not st.session_state.show_2fa_setup:
-        if not st.session_state.user.get("2fa_secret"):
+        if not st.session_state.user.get("twofa_secret"):
             if st.button("Enable 2FA for Extra Security"):
                 secret = generate_2fa_secret()
                 db.enable_2fa(st.session_state.user_id, secret)

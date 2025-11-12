@@ -5,6 +5,7 @@ import json
 import bcrypt
 from datetime import datetime, date
 import streamlit as st
+import uuid
 
 DB_PATH = "users.db"
 
@@ -17,7 +18,7 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
 
-    # Create tables with ALL columns (including last_active)
+    # FIXED: twofa_secret instead of 2fa_secret
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
@@ -34,7 +35,7 @@ def init_db():
         badges TEXT DEFAULT '[]',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         last_active TEXT DEFAULT CURRENT_TIMESTAMP,
-        2fa_secret TEXT
+        twofa_secret TEXT
     )
     ''')
 
@@ -86,10 +87,9 @@ def init_db():
     ''')
 
     # === UPGRADE OLD DATABASES ===
-    # Add missing columns if they don't exist
     columns_to_add = [
         ("users", "last_active", "TEXT DEFAULT CURRENT_TIMESTAMP"),
-        ("users", "2fa_secret", "TEXT"),
+        ("users", "twofa_secret", "TEXT"),
         ("users", "badges", "TEXT DEFAULT '[]'"),
         ("users", "parent_id", "TEXT"),
         ("users", "premium_until", "TEXT"),
@@ -100,7 +100,7 @@ def init_db():
         try:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {definition}")
         except sqlite3.OperationalError:
-            pass  # Column already exists
+            pass  # Already exists
 
     # Create admin if not exists
     cursor.execute("SELECT * FROM users WHERE email = ?", ("kingmumo15@gmail.com",))
@@ -114,14 +114,14 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Initialize on import
+# Initialize DB
 init_db()
 
 class Database:
     def __init__(self):
         pass
 
-    # === USER MANAGEMENT ===
+    # === USER ===
     def create_user(self, email: str, password: str):
         user_id = str(uuid.uuid4())
         hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -233,28 +233,28 @@ class Database:
             cursor.execute("UPDATE manual_payments SET status = 'rejected' WHERE id = ?", (payment_id,))
             conn.commit()
 
-    # === 2FA ===
+    # === 2FA (FIXED: twofa_secret) ===
     def is_2fa_enabled(self, user_id: str):
         with get_db() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT 2fa_secret FROM users WHERE user_id = ?", (user_id,))
+            cursor.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
-            return bool(row and row["2fa_secret"])
+            return bool(row and row["twofa_secret"])
 
     def enable_2fa(self, user_id: str, secret: str):
         with get_db() as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET 2fa_secret = ? WHERE user_id = ?", (secret, user_id))
+            cursor.execute("UPDATE users SET twofa_secret = ? WHERE user_id = ?", (secret, user_id))
             conn.commit()
 
     def verify_2fa_code(self, user_id: str, code: str):
         with get_db() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT 2fa_secret FROM users WHERE user_id = ?", (user_id,))
+            cursor.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
-            if not row or not row["2fa_secret"]:
+            if not row or not row["twofa_secret"]:
                 return False
-            return pyotp.TOTP(row["2fa_secret"]).verify(code)
+            return pyotp.TOTP(row["twofa_secret"]).verify(code)
 
     # === CHAT & LIMITS ===
     def add_chat_history(self, user_id: str, subject: str, query: str, response: str):
