@@ -4,7 +4,8 @@ import time
 import requests
 from streamlit import cache_data
 from typing import List, Dict
-import fitz  # PyMuPDF - pip install pymupdf
+import io
+import PyPDF2   # <-- pure-Python PDF reader (already in requirements.txt)
 
 # ==============================================================================
 # API CONFIGURATION
@@ -12,10 +13,10 @@ import fitz  # PyMuPDF - pip install pymupdf
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
 
-# Chat / streaming – stable, fast, free tier (corrected to valid model)
+# Chat / streaming – stable, fast, free tier
 GEMINI_CHAT_MODEL = "gemini-1.5-flash"
 
-# Structured JSON (exam, grading) – reliable fallback (corrected to valid model)
+# Structured JSON (exam, grading) – reliable fallback
 GEMINI_STRUCTURED_MODEL = "gemini-1.5-flash"
 
 # ==============================================================================
@@ -25,7 +26,7 @@ GEMINI_STRUCTURED_MODEL = "gemini-1.5-flash"
 class AIEngine:
     def __init__(self, gemini_key: str, hf_key: str = ""):
         self.gemini_key = gemini_key or ""
-        self.hf_key = hf_key or ""  # Not used anymore, but kept for compatibility
+        self.hf_key = hf_key or ""  # kept for compatibility
 
     # --------------------------------------------------------------------------
     # Low-level request with back-off + detailed logging
@@ -65,17 +66,20 @@ class AIEngine:
                 time.sleep(2 ** attempt)
 
     # --------------------------------------------------------------------------
-    # PDF → TEXT (LOCAL with PyMuPDF) – NO HF, NO INTERNET
+    # PDF → TEXT (LOCAL with PyPDF2) – NO C extensions, works on Streamlit Cloud
     # --------------------------------------------------------------------------
     @cache_data(ttl="2h", show_spinner="Extracting PDF…")
     def extract_text_from_pdf(_self, pdf_bytes: bytes) -> str:
-        """Extract text locally using PyMuPDF – works offline & in production."""
+        """Extract text using PyPDF2 – pure Python, no system deps."""
         try:
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            pdf_file = io.BytesIO(pdf_bytes)
+            reader = PyPDF2.PdfReader(pdf_file)
             text = ""
-            for page in doc:
-                text += page.get_text("text") + "\n"
-            return text.strip()
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+            return text.strip() or "No text found in PDF."
         except Exception as e:
             return f"Error extracting PDF: {e}"
 
@@ -149,10 +153,6 @@ class AIEngine:
     # ENHANCED: MULTIPLE-CHOICE QUIZ GENERATION
     # --------------------------------------------------------------------------
     def generate_mcq_questions(self, subject: str, num_questions: int = 5) -> List[Dict]:
-        """
-        Generate MCQ questions using Gemini.
-        Returns list of dicts: question, options, correct_answer, feedback
-        """
         prompt = f"""
 Generate {num_questions} multiple-choice questions for {subject} (KCSE level).
 Each question must have:
@@ -173,7 +173,6 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
 """
         try:
             response = self.generate_response(prompt, "You are a quiz generator. Output only JSON.")
-            # Clean and parse
             json_str = response.strip()
             if json_str.startswith("```json"):
                 json_str = json_str[7:-3]
@@ -183,7 +182,6 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
             return questions[:num_questions]
         except Exception as e:
             print(f"MCQ generation failed: {e}")
-            # Fallback mock
             return [
                 {
                     "question": f"What is 2 + 2 in {subject}?",
@@ -197,19 +195,14 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
     # ENHANCED: GRADE MCQ
     # --------------------------------------------------------------------------
     def grade_mcq(self, questions: List[Dict], user_answers: Dict[int, str]) -> Dict:
-        """
-        Grade user answers.
-        Returns: correct count, total, percentage, detailed results
-        """
         correct = 0
-        total_score = 0  # For partial credit
+        total_score = 0
         results = []
         for i, q in enumerate(questions):
             user_ans = user_answers.get(i, "").strip()
             correct_ans = q["correct_answer"].strip()
             is_correct = user_ans == correct_ans
             score = 100 if is_correct else 0
-            # Optional: AI partial credit if not exact
             if not is_correct and user_ans:
                 partial_prompt = f"Is '{user_ans}' partially correct compared to '{correct_ans}'? Score 0-50."
                 partial_resp = self.generate_response(partial_prompt, "Quick partial grader.")
@@ -259,7 +252,6 @@ Score 0-100 on accuracy, completeness. Output JSON: {{"score": int, "feedback": 
             return {"score": 50 if len(user_answer) > 15 else 0, "feedback": "Basic check: Add more content."}
 
     def grade_essay(self, essay: str, rubric: str) -> Dict:
-        """Grade essay using Gemini for accuracy."""
         prompt = f"""
 Grade this essay on a scale of 0-100 based on the rubric: {rubric}
 Essay: {essay}
