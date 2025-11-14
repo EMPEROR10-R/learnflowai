@@ -1,7 +1,6 @@
 # app.py
 import streamlit as st
 import logging
-import bcrypt
 from database import Database
 from ai_engine import AIEngine
 from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
@@ -16,8 +15,9 @@ logger = logging.getLogger(__name__)
 def show_error(e):
     st.error(f"App crashed: {type(e).__name__}: {e}")
     logger.error(f"Crash: {e}", exc_info=True)
+st.exception_handler = show_error
 
-st.set_page_config(page_title="LearnFlow AI", page_icon="🇰🇪", layout="wide")
+st.set_page_config(page_title="LearnFlow AI", page_icon="Kenya", layout="wide")
 
 # ────────────────────────────── CSS ──────────────────────────────
 st.markdown("""
@@ -149,28 +149,76 @@ def chat_tab():
             resp = ai_engine.generate_response(q, get_enhanced_prompt(st.session_state.current_subject, q, ""))
         st.session_state.chat_history.append({"role":"assistant","content":resp})
         db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, q, resp)
-        db.add_score(st.session_state.user_id, "chat", 10)  # Assuming a score for chat interaction; adjust as needed
+        db.add_score(st.session_state.user_id, "chat", 1)
+        st.rerun()
 
 def pdf_tab():
-    # Assuming this function is defined elsewhere in the full code; placeholder
-    st.write("PDF Upload tab content here.")
+    st.markdown('<span class="tab-header">### PDF Upload & Analysis</span>', unsafe_allow_html=True)
+    up = st.file_uploader("Upload PDF", type="pdf")
+    if up:
+        txt = ai_engine.extract_text_from_pdf(up.read())
+        st.success(f"Extracted {len(txt)} chars")
+        q = st.text_area("Ask about the PDF")
+        if st.button("Ask") and q:
+            resp = ai_engine.generate_response(f"Document:\n{txt[:4000]}\n\nQ: {q}", "Answer in 1-2 sentences.")
+            st.markdown(f"**AI:** {resp}")
+            db.add_badge(st.session_state.user_id, "pdf_explorer")
 
 def progress_tab():
-    # Assuming this function is defined elsewhere in the full code; placeholder
-    st.write("Progress tab content here.")
+    try:
+        user = db.get_user(st.session_state.user_id) or {}
+        c1,c2,c3 = st.columns(3)
+        c1.metric("Queries", user.get("total_queries", 0))
+        c2.metric("Streak", f"{user.get('streak_days', 0)} days")
+        badges = json.loads(user.get("badges", "[]"))
+        c3.metric("Badges", len(badges))
+
+        st.markdown('<span class="tab-header">### Your Badges</span>', unsafe_allow_html=True)
+        for b in badges:
+            st.markdown(f'<div class="badge-item">- {BADGES.get(b, b)}</div>', unsafe_allow_html=True)
+
+        st.markdown('<span class="tab-header">### Leaderboards</span>', unsafe_allow_html=True)
+        exam_lb = db.get_leaderboard("exam") or []
+        essay_lb = db.get_leaderboard("essay") or []
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown('<div class="leaderboard"><b>Exam Prep</b></div>', unsafe_allow_html=True)
+            if exam_lb:
+                df = pd.DataFrame(exam_lb)
+                st.dataframe(df, use_container_width=True)
+                st.line_chart(df.set_index('email')['score'])
+            else:
+                st.info("No scores yet")
+        with col2:
+            st.markdown('<div class="leaderboard"><b>Essay Grader</b></div>', unsafe_allow_html=True)
+            if essay_lb:
+                df = pd.DataFrame(essay_lb)
+                st.dataframe(df, use_container_width=True)
+                st.line_chart(df.set_index('email')['score'])
+            else:
+                st.info("No scores yet")
+
+        if date.today().day == 1:
+            for uid, cat in db.get_monthly_leaders():
+                db.apply_discount(uid, 0.10)
+                st.success(f"10% discount applied to leader in **{cat}**!")
+    except Exception as e:
+        st.error("Progress error")
+        logger.error(f"Progress tab: {e}")
 
 def exam_tab():
     st.markdown('<span class="tab-header">### Exam Prep</span>', unsafe_allow_html=True)
-    if "exam_questions" not in st.session_state:
-        subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
-        exam_type = st.selectbox("Exam Type", list(EXAM_TYPES.keys()))
-        num_questions = st.number_input("Number of Questions", min_value=1, max_value=20, value=5)
-        if st.button("Generate Exam"):
-            with st.spinner("Generating questions…"):
-                st.session_state.exam_questions = ai_engine.generate_exam_questions(subject, exam_type, num_questions)
-                st.session_state.user_answers = {}
-            st.rerun()
-    else:
+    exam = st.selectbox("Exam", list(EXAM_TYPES.keys()))
+    subj = st.selectbox("Subject", EXAM_TYPES[exam]["subjects"])
+    n = st.slider("Questions", 1, 10, 5)
+    if st.button("Generate"):
+        with st.spinner("Generating…"):
+            qs = ai_engine.generate_mcq_questions(subj, n)
+        st.session_state.exam_questions = qs
+        st.session_state.user_answers = {}
+        st.rerun()
+
+    if "exam_questions" in st.session_state:
         qs = st.session_state.exam_questions
         for i, q in enumerate(qs):
             st.markdown(f"**Q{i+1}:** {q['question']}")
