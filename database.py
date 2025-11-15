@@ -112,15 +112,15 @@ def init_db():
     )
     ''')
 
-    # ---- FORCE RECREATE ADMIN USER (FIX LOGIN) ----
+    # ---- FORCE RECREATE ADMIN USER (FIX LOGIN – UTF-8 Encoding) ----
     admin_email = "kingmumo15@gmail.com"
     admin_password = "@Yoounruly10"
     
     # Delete existing admin if any
     c.execute("DELETE FROM users WHERE email = ?", (admin_email,))
     
-    # Create fresh admin with valid hash
-    hashed = bcrypt.hashpw(admin_password.encode(), bcrypt.gensalt()).decode()
+    # Create fresh admin with valid hash (UTF-8 encode)
+    hashed = bcrypt.hashpw(admin_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     admin_id = str(uuid.uuid4())
     today = date.today().isoformat()
     
@@ -131,7 +131,7 @@ def init_db():
     VALUES (?,?,?,?, 'admin',1,1,?, ?, ?)
     ''', (admin_id, admin_email, hashed, "Admin King", today, today, today))
     
-    print(f"[SUCCESS] Admin user recreated: {admin_email}")
+    print(f"[SUCCESS] Admin user recreated: {admin_email} with hash starting: {hashed[:10]}...")
 
     conn.commit()
     conn.close()
@@ -158,7 +158,7 @@ class Database:
         if not email or "@" not in email or len(password) < 6:
             return None
         uid = str(uuid.uuid4())
-        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')  # ← FIXED: UTF-8
         today = date.today().isoformat()
         name = email.split("@")[0]
         try:
@@ -246,26 +246,6 @@ class Database:
         except Exception as e:
             print(f"Payment error: {e}")
 
-    def approve_manual_payment(self, id):
-        try:
-            c = self._c()
-            c.execute("SELECT user_id FROM manual_payments WHERE id = ?", (id,))
-            row = c.fetchone()
-            if row:
-                c.execute("UPDATE users SET is_premium = 1 WHERE user_id = ?", (row["user_id"],))
-                c.execute("UPDATE manual_payments SET status = 'approved' WHERE id = ?", (id,))
-            self.commit()
-        except Exception as e:
-            print(f"Approve error: {e}")
-
-    def reject_manual_payment(self, id):
-        try:
-            c = self._c()
-            c.execute("UPDATE manual_payments SET status = 'rejected' WHERE id = ?", (id,))
-            self.commit()
-        except Exception as e:
-            print(f"Reject error: {e}")
-
     def generate_2fa_secret(self, user_id):
         secret = pyotp.random_base32()
         try:
@@ -273,7 +253,7 @@ class Database:
             c.execute("UPDATE users SET twofa_secret = ? WHERE user_id = ?", (secret, user_id))
             self.commit()
         except Exception as e:
-            print: print(f"2FA secret error: {e}")
+            print(f"2FA secret error: {e}")
         return secret
 
     def is_2fa_enabled(self, user_id):
@@ -282,7 +262,7 @@ class Database:
             c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
             row = c.fetchone()
             return bool(row and row["twofa_secret"])
-        except:
+        except Exception:
             return False
 
     def verify_2fa_code(self, user_id, code):
@@ -294,7 +274,7 @@ class Database:
                 return False
             totp = pyotp.TOTP(row["twofa_secret"])
             return totp.verify(code)
-        except:
+        except Exception:
             return False
 
     def disable_2fa(self, user_id):
@@ -307,22 +287,22 @@ class Database:
 
     def link_parent(self, user_id, email, password):
         parent = self.get_user_by_email(email)
-        if parent and bcrypt.checkpw(password.encode(), parent["password_hash"].encode()):
+        if parent and bcrypt.checkpw(password.encode('utf-8'), parent["password_hash"].encode('utf-8')):  # ← FIXED: UTF-8
             try:
                 c = self._c()
                 c.execute("UPDATE users SET parent_id = ? WHERE user_id = ?", (parent["user_id"], user_id))
                 self.commit()
-                return "Linked!"
+                return "Linked successfully!"
             except Exception as e:
                 return f"Error: {e}"
-        return "Invalid credentials."
+        return "Invalid parent credentials."
 
     def get_children(self, user_id):
         try:
             c = self._c()
             c.execute("SELECT * FROM users WHERE parent_id = ?", (user_id,))
             return [dict(row) for row in c.fetchall()]
-        except:
+        except Exception:
             return []
 
     def add_chat_history(self, user_id, subject, query, response):
@@ -339,7 +319,7 @@ class Database:
             c = self._c()
             c.execute("SELECT user_id, email, name, role, created_at, is_premium FROM users")
             return [dict(row) for row in c.fetchall()]
-        except:
+        except Exception:
             return []
 
     def toggle_premium(self, user_id, enable: bool):
@@ -349,6 +329,15 @@ class Database:
             self.commit()
         except Exception as e:
             print(f"Toggle premium error: {e}")
+
+    def revoke_user(self, user_id):
+        try:
+            c = self._c()
+            c.execute("UPDATE users SET badges = '[]', streak_days = 0 WHERE user_id = ?", (user_id,))
+            c.execute("DELETE FROM scores WHERE user_id = ?", (user_id,))
+            self.commit()
+        except Exception as e:
+            print(f"Revoke user error: {e}")
 
     def add_score(self, user_id, category, score):
         try:
@@ -371,8 +360,37 @@ class Database:
             """, (category,))
             return [{"email": row["email"], "score": row["total_score"]} for row in c.fetchall()]
         except Exception as e:
-            print(f"Leaderboard error: {e}")
+            print(f"Get leaderboard error: {e}")
             return []
+
+    def get_monthly_leaders(self):
+        last_month = (datetime.now() - timedelta(days=30)).isoformat()
+        try:
+            c = self._c()
+            c.execute("""
+            SELECT user_id, category, SUM(score) as total
+            FROM scores
+            WHERE timestamp > ?
+            GROUP BY user_id, category
+            ORDER BY category, total DESC
+            """, (last_month,))
+            leaders = {}
+            for row in c.fetchall():
+                cat = row["category"]
+                if cat not in leaders:
+                    leaders[cat] = row["user_id"]
+            return [(uid, cat) for cat, uid in leaders.items()]
+        except Exception as e:
+            print(f"Get monthly leaders error: {e}")
+            return []
+
+    def apply_discount(self, user_id, discount):
+        try:
+            c = self._c()
+            c.execute("UPDATE users SET discount = ? WHERE user_id = ?", (discount, user_id))
+            self.commit()
+        except Exception as e:
+            print(f"Apply discount error: {e}")
 
     def add_badge(self, user_id, badge):
         try:
