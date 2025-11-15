@@ -15,7 +15,7 @@ def get_db():
     return conn
 
 def ensure_columns():
-    """Run on *every* app start – guarantees every column exists."""
+    """Guarantee all required columns exist."""
     conn = get_db()
     c = conn.cursor()
     required = [
@@ -38,7 +38,7 @@ def ensure_columns():
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
-            pass   # column already present
+            pass
     conn.commit()
     conn.close()
 
@@ -106,28 +106,36 @@ def init_db():
     CREATE TABLE IF NOT EXISTS scores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
-        category TEXT,  -- 'exam' or 'essay'
+        category TEXT,
         score REAL,
         timestamp TEXT DEFAULT CURRENT_TIMESTAMP
     )
     ''')
 
-    # ---- ADMIN USER --------------------------------------------
-    c.execute("SELECT 1 FROM users WHERE email = ?", ("kingmumo15@gmail.com",))
-    if not c.fetchone():
-        hashed = bcrypt.hashpw("@Yoounruly10".encode(), bcrypt.gensalt()).decode()
-        admin_id = str(uuid.uuid4())
-        today = date.today().isoformat()
-        c.execute('''
-        INSERT INTO users 
-        (user_id, email, password_hash, name, role, is_premium,
-         streak_days, last_streak_date, last_active, created_at)
-        VALUES (?,?,?,?, 'admin',1,1,?, ?, ?)
-        ''', (admin_id, "kingmumo15@gmail.com", hashed, "Admin King", today, today, today))
+    # ---- FORCE RECREATE ADMIN USER (FIX LOGIN) ----
+    admin_email = "kingmumo15@gmail.com"
+    admin_password = "@Yoounruly10"
+    
+    # Delete existing admin if any
+    c.execute("DELETE FROM users WHERE email = ?", (admin_email,))
+    
+    # Create fresh admin with valid hash
+    hashed = bcrypt.hashpw(admin_password.encode(), bcrypt.gensalt()).decode()
+    admin_id = str(uuid.uuid4())
+    today = date.today().isoformat()
+    
+    c.execute('''
+    INSERT INTO users 
+    (user_id, email, password_hash, name, role, is_premium,
+     streak_days, last_streak_date, last_active, created_at)
+    VALUES (?,?,?,?, 'admin',1,1,?, ?, ?)
+    ''', (admin_id, admin_email, hashed, "Admin King", today, today, today))
+    
+    print(f"[SUCCESS] Admin user recreated: {admin_email}")
 
     conn.commit()
     conn.close()
-    ensure_columns()  # <-- Critical: Run after init
+    ensure_columns()
 
 # -----------------------------------------------------------------
 # Run on import
@@ -135,9 +143,9 @@ init_db()
 
 class Database:
     def __init__(self):
-        init_db()  # Ensure tables always
+        init_db()
         self.conn = get_db()
-        ensure_columns()  # Ensure columns exist on every instance
+        ensure_columns()
 
     def _c(self):
         return self.conn.cursor()
@@ -152,7 +160,7 @@ class Database:
         uid = str(uuid.uuid4())
         hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         today = date.today().isoformat()
-        name = email.split("@")[0] if "@" in email else "User"
+        name = email.split("@")[0]
         try:
             c = self._c()
             c.execute('''
@@ -164,9 +172,6 @@ class Database:
             self.commit()
             return uid
         except sqlite3.IntegrityError:
-            return None
-        except Exception as e:
-            print(f"Create user error: {e}")
             return None
 
     def get_user_by_email(self, email: str) -> Optional[Dict]:
@@ -190,8 +195,7 @@ class Database:
             return None
 
     def update_user_activity(self, user_id: str):
-        if not user_id:
-            return
+        if not user_id: return
         try:
             c = self._c()
             c.execute(
@@ -199,91 +203,57 @@ class Database:
                 (user_id,)
             )
             self.commit()
-        except sqlite3.OperationalError as e:
-            if "no such column" in str(e):
-                ensure_columns()
-                try:
-                    c = self._c()
-                    c.execute(
-                        "UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?",
-                        (user_id,)
-                    )
-                    self.commit()
-                except:
-                    pass
-            else:
-                print(f"Activity update error: {e}")
         except Exception as e:
-            print(f"Activity update error: {e}")
+            print(f"Update activity error: {e}")
 
     def update_streak(self, user_id: str) -> int:
-        if not user_id:
-            return 0
         try:
             c = self._c()
             c.execute("SELECT last_streak_date, streak_days FROM users WHERE user_id = ?", (user_id,))
             row = c.fetchone()
+            if not row: return 0
+            last_date = row["last_streak_date"]
+            streak = row["streak_days"]
             today = date.today().isoformat()
-            yesterday = (date.today() - timedelta(days=1)).isoformat()
-
-            if not row:
-                c.execute("UPDATE users SET streak_days = 1, last_streak_date = ? WHERE user_id = ?", (today, user_id))
-                self.commit()
-                return 1
-
-            last, streak = (row["last_streak_date"] or today), (row["streak_days"] or 0)
-
-            if last == today:
+            if last_date == today:
                 return streak
-            elif last == yesterday:
+            elif last_date == (date.today() - timedelta(days=1)).isoformat():
                 streak += 1
-                if streak == 3: self.add_badge(user_id, "streak_3")
-                if streak == 7: self.add_badge(user_id, "streak_7")
-                if streak == 30: self.add_badge(user_id, "streak_30")
             else:
                 streak = 1
             c.execute("UPDATE users SET streak_days = ?, last_streak_date = ? WHERE user_id = ?", (streak, today, user_id))
             self.commit()
             return streak
         except Exception as e:
-            print(f"Streak update error: {e}")
+            print(f"Streak error: {e}")
             return 0
 
     def check_premium(self, user_id: str) -> bool:
-        if not user_id:
-            return False
         try:
             c = self._c()
             c.execute("SELECT is_premium FROM users WHERE user_id = ?", (user_id,))
             row = c.fetchone()
             return bool(row and row["is_premium"])
-        except Exception:
+        except:
             return False
 
     def add_manual_payment(self, user_id, phone, code):
         try:
             c = self._c()
-            c.execute("INSERT INTO manual_payments (user_id, phone, mpesa_code) VALUES (?, ?, ?)", (user_id, phone, code))
+            c.execute("INSERT INTO manual_payments (user_id, phone, mpesa_code) VALUES (?, ?, ?)",
+                      (user_id, phone, code))
             self.commit()
         except Exception as e:
-            print(f"Payment add error: {e}")
-
-    def get_pending_manual_payments(self):
-        try:
-            c = self._c()
-            c.execute("SELECT * FROM manual_payments WHERE status = 'pending'")
-            return [dict(row) for row in c.fetchall()]
-        except Exception:
-            return []
+            print(f"Payment error: {e}")
 
     def approve_manual_payment(self, id):
         try:
             c = self._c()
-            c.execute("UPDATE manual_payments SET status = 'approved' WHERE id = ?", (id,))
             c.execute("SELECT user_id FROM manual_payments WHERE id = ?", (id,))
             row = c.fetchone()
             if row:
-                self.toggle_premium(row["user_id"], True)
+                c.execute("UPDATE users SET is_premium = 1 WHERE user_id = ?", (row["user_id"],))
+                c.execute("UPDATE manual_payments SET status = 'approved' WHERE id = ?", (id,))
             self.commit()
         except Exception as e:
             print(f"Approve error: {e}")
@@ -303,7 +273,7 @@ class Database:
             c.execute("UPDATE users SET twofa_secret = ? WHERE user_id = ?", (secret, user_id))
             self.commit()
         except Exception as e:
-            print(f"2FA secret error: {e}")
+            print: print(f"2FA secret error: {e}")
         return secret
 
     def is_2fa_enabled(self, user_id):
@@ -312,7 +282,7 @@ class Database:
             c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
             row = c.fetchone()
             return bool(row and row["twofa_secret"])
-        except Exception:
+        except:
             return False
 
     def verify_2fa_code(self, user_id, code):
@@ -324,7 +294,7 @@ class Database:
                 return False
             totp = pyotp.TOTP(row["twofa_secret"])
             return totp.verify(code)
-        except Exception:
+        except:
             return False
 
     def disable_2fa(self, user_id):
@@ -342,17 +312,17 @@ class Database:
                 c = self._c()
                 c.execute("UPDATE users SET parent_id = ? WHERE user_id = ?", (parent["user_id"], user_id))
                 self.commit()
-                return "Linked successfully!"
+                return "Linked!"
             except Exception as e:
                 return f"Error: {e}"
-        return "Invalid parent credentials."
+        return "Invalid credentials."
 
     def get_children(self, user_id):
         try:
             c = self._c()
             c.execute("SELECT * FROM users WHERE parent_id = ?", (user_id,))
             return [dict(row) for row in c.fetchall()]
-        except Exception:
+        except:
             return []
 
     def add_chat_history(self, user_id, subject, query, response):
@@ -369,7 +339,7 @@ class Database:
             c = self._c()
             c.execute("SELECT user_id, email, name, role, created_at, is_premium FROM users")
             return [dict(row) for row in c.fetchall()]
-        except Exception:
+        except:
             return []
 
     def toggle_premium(self, user_id, enable: bool):
@@ -379,15 +349,6 @@ class Database:
             self.commit()
         except Exception as e:
             print(f"Toggle premium error: {e}")
-
-    def revoke_user(self, user_id):
-        try:
-            c = self._c()
-            c.execute("UPDATE users SET badges = '[]', streak_days = 0 WHERE user_id = ?", (user_id,))
-            c.execute("DELETE FROM scores WHERE user_id = ?", (user_id,))
-            self.commit()
-        except Exception as e:
-            print(f"Revoke user error: {e}")
 
     def add_score(self, user_id, category, score):
         try:
@@ -410,39 +371,8 @@ class Database:
             """, (category,))
             return [{"email": row["email"], "score": row["total_score"]} for row in c.fetchall()]
         except Exception as e:
-            print(f"Get leaderboard error: {e}")
+            print(f"Leaderboard error: {e}")
             return []
-
-    def get_monthly_leaders(self):
-        # Simulate getting top leaders for last month
-        last_month = (datetime.now() - timedelta(days=30)).isoformat()
-        try:
-            c = self._c()
-            c.execute("""
-            SELECT user_id, category, SUM(score) as total
-            FROM scores
-            WHERE timestamp > ?
-            GROUP BY user_id, category
-            ORDER BY category, total DESC
-            """, (last_month,))
-            # Get top per category
-            leaders = {}
-            for row in c.fetchall():
-                cat = row["category"]
-                if cat not in leaders:
-                    leaders[cat] = row["user_id"]
-            return [(uid, cat) for cat, uid in leaders.items()]
-        except Exception as e:
-            print(f"Get monthly leaders error: {e}")
-            return []
-
-    def apply_discount(self, user_id, discount):
-        try:
-            c = self._c()
-            c.execute("UPDATE users SET discount = ? WHERE user_id = ?", (discount, user_id))
-            self.commit()
-        except Exception as e:
-            print(f"Apply discount error: {e}")
 
     def add_badge(self, user_id, badge):
         try:
