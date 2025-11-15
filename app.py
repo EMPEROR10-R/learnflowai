@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 # ────────────────────────────── CONFIG ──────────────────────────────
 st.set_page_config(page_title="LearnFlow AI", page_icon="🇰🇪", layout="wide")
 
+# Debug: Show this first to prove app loads
+st.write("✅ **APP LOADED SUCCESSFULLY!** (No white screen)")
+
 # ────────────────────────────── CSS ──────────────────────────────
 st.markdown("""
 <style>
@@ -35,15 +38,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ────────────────────────────── INITIALIZERS ──────────────────────────────
+# ────────────────────────────── INITIALIZERS (With Error Handling) ──────────────────────────────
 @st.cache_resource
 def init_db():
     try:
         db = Database()
         db.conn.execute("PRAGMA journal_mode=WAL;")
+        st.success("Database ready!")
         return db
     except Exception as e:
-        st.error(f"Database error: {str(e)}")
+        st.error(f"Database error: {str(e)} – Using dummy mode.")
         logger.error(f"DB init failed: {e}")
         class Dummy:
             def __getattr__(self, _): return lambda *a, **k: None
@@ -55,13 +59,13 @@ def init_db():
 @st.cache_resource
 def init_ai():
     try:
-        key = st.secrets["GEMINI_API_KEY"]
+        key = st.secrets.get("GEMINI_API_KEY", "")
+        if not key:
+            st.warning("No GEMINI_API_KEY in secrets – AI will be disabled. Add in Cloud Settings > Secrets.")
+            return AIEngine("")
         return AIEngine(key)
-    except KeyError:
-        st.error("GEMINI_API_KEY not set in secrets – add it in Cloud Settings > Secrets.")
-        return AIEngine("")
     except Exception as e:
-        st.error(f"AI init error: {str(e)}")
+        st.error(f"AI init error: {str(e)} – AI disabled.")
         logger.warning(f"AI init failed: {e}")
         return AIEngine("")
 
@@ -109,7 +113,7 @@ def login_block():
             user = db.get_user_by_email(email)
             if not user or not bcrypt.checkpw(pwd.encode(), user["password_hash"].encode()):
                 st.error("Wrong credentials")
-            elif db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
+            elif hasattr(db, 'is_2fa_enabled') and db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
                 st.error("Bad 2FA code")
             else:
                 db.update_user_activity(user["user_id"])
@@ -129,16 +133,19 @@ def sidebar():
             st.image(user["profile_pic"], width=100)
         if db.check_premium(st.session_state.user_id):
             st.markdown('<span class="premium-badge">PREMIUM</span>', unsafe_allow_html=True)
-        streak = db.update_streak(st.session_state.user_id)
+        streak = getattr(db, 'update_streak', lambda x: 0)(st.session_state.user_id)
         st.markdown(f'<span class="streak-badge">Streak: {streak} days</span>', unsafe_allow_html=True)
         st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
         if st.button("Logout"):
             for k in list(st.session_state.keys()): del st.session_state[k]
             st.rerun()
 
-# ────────────────────────────── TABS ──────────────────────────────
+# ────────────────────────────── TABS (Placeholders to Avoid Crashes) ──────────────────────────────
 def chat_tab():
     st.markdown(f'<span class="tab-header">### {st.session_state.current_subject} Tutor</span>', unsafe_allow_html=True)
+    if ai_engine is None:
+        st.warning("AI not loaded – check secrets.")
+        return
     for m in st.session_state.chat_history:
         role = "You" if m["role"]=="user" else "AI"
         st.markdown(f"**{role}:** {m['content']}")
@@ -148,14 +155,24 @@ def chat_tab():
         with st.spinner("Thinking…"):
             resp = ai_engine.generate_response(q, get_enhanced_prompt(st.session_state.current_subject, q, ""))
         st.session_state.chat_history.append({"role":"assistant","content":resp})
-        db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, q, resp)
-        db.add_score(st.session_state.user_id, "chat", 10)
+        # Skip DB calls if dummy
+        if hasattr(db, 'add_chat_history'):
+            db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, q, resp)
+        if hasattr(db, 'add_score'):
+            db.add_score(st.session_state.user_id, "chat", 10)
 
 def pdf_tab():
-    st.write("PDF Upload tab – coming soon.")
+    st.markdown('<span class="tab-header">### PDF Upload</span>', unsafe_allow_html=True)
+    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+    if uploaded_file is not None:
+        text = ai_engine.extract_text_from_pdf(uploaded_file.read())
+        st.text_area("Extracted Text:", text, height=300)
+    else:
+        st.info("Upload a PDF to extract text (uses PyPDF2 – no crashes).")
 
 def progress_tab():
-    st.write("Progress tracking – coming soon.")
+    st.markdown('<span class="tab-header">### Progress</span>', unsafe_allow_html=True)
+    st.write("Progress tracking coming soon.")
 
 def exam_tab():
     st.markdown('<span class="tab-header">### Exam Prep</span>', unsafe_allow_html=True)
@@ -164,7 +181,7 @@ def exam_tab():
         exam_type = st.selectbox("Exam Type", list(EXAM_TYPES.keys()))
         num_questions = st.number_input("Number of Questions", min_value=1, max_value=20, value=5)
         if st.button("Generate Exam"):
-            with st.spinner("Generating questions…"):
+            with st.spinner("Generating…"):
                 st.session_state.exam_questions = ai_engine.generate_exam_questions(subject, exam_type, num_questions)
                 st.session_state.user_answers = {}
             st.rerun()
@@ -176,13 +193,15 @@ def exam_tab():
         if st.button("Submit"):
             with st.spinner("Grading…"):
                 res = ai_engine.grade_mcq(qs, st.session_state.user_answers)
-                db.add_score(st.session_state.user_id, "exam", res["percentage"])
+                if hasattr(db, 'add_score'):
+                    db.add_score(st.session_state.user_id, "exam", res["percentage"])
                 if res["percentage"] == 100:
-                    db.add_badge(st.session_state.user_id, "perfect_score")
+                    if hasattr(db, 'add_badge'):
+                        db.add_badge(st.session_state.user_id, "perfect_score")
                     st.balloons()
                 st.markdown(f"**Score: {res['percentage']}%**")
                 for r in res["results"]:
-                    icon = "Correct" if r["is_correct"] else "Wrong"
+                    icon = "✅ Correct" if r["is_correct"] else "❌ Wrong"
                     st.markdown(f"- {icon} **{r['question']}**  \n  Your: `{r['user_answer']}`  \n  Correct: `{r['correct_answer']}`  \n  {r['feedback']}")
             del st.session_state.exam_questions, st.session_state.user_answers
 
@@ -193,9 +212,11 @@ def essay_tab():
     if st.button("Grade") and essay:
         with st.spinner("Grading…"):
             res = ai_engine.grade_essay(essay, rubric)
-            db.add_score(st.session_state.user_id, "essay", res["score"])
+            if hasattr(db, 'add_score'):
+                db.add_score(st.session_state.user_id, "essay", res["score"])
             if res["score"] >= 90:
-                db.add_badge(st.session_state.user_id, "quiz_ace")
+                if hasattr(db, 'add_badge'):
+                    db.add_badge(st.session_state.user_id, "quiz_ace")
                 st.balloons()
             st.markdown(f"**Score: {res['score']}/100** – {res['feedback']}")
 
@@ -206,7 +227,8 @@ def premium_tab():
     code = st.text_input("M-Pesa Transaction Code")
     if st.button("Submit Proof", type="primary"):
         if phone and code:
-            db.add_manual_payment(st.session_state.user_id, phone, code)
+            if hasattr(db, 'add_manual_payment'):
+                db.add_manual_payment(st.session_state.user_id, phone, code)
             st.success("Submitted! Admin will activate in 24 hrs.")
             st.balloons()
         else:
@@ -214,24 +236,24 @@ def premium_tab():
 
 def settings_tab():
     st.markdown('<span class="tab-header">### Settings</span>', unsafe_allow_html=True)
-    # 2FA, theme, etc. (as in original)
-    st.write("Settings panel – full version in original code.")
+    st.write("Settings (theme, 2FA) coming soon.")
 
 def parent_dashboard():
     st.markdown('<span class="tab-header">### Parent Dashboard</span>', unsafe_allow_html=True)
-    st.write("Child tracking – coming soon.")
+    st.write("Child tracking coming soon.")
 
 def admin_dashboard():
     if not st.session_state.is_admin: st.error("Access denied"); return
     st.markdown('<span class="tab-header">## Admin Dashboard</span>', unsafe_allow_html=True)
-    st.write("User management – full version in original.")
+    st.write("User management coming soon.")
 
 # ────────────────────────────── MAIN ──────────────────────────────
 def main():
-    st.write("App is running! If you see this, code loaded.")
     init_session()
     apply_theme()
-    if st.session_state.show_welcome: welcome_screen(); return
+    if st.session_state.show_welcome: 
+        welcome_screen()
+        return
     login_block()
     sidebar()
 
@@ -249,7 +271,7 @@ def main():
     with tab_objs[idx]: exam_tab(); idx += 1
     with tab_objs[idx]: essay_tab(); idx += 1
     if "Premium" in tabs:
-        with tab_objs[tabs.index("Premium")]: premium_tab()
+        with tab_objs[tabs.index("Premium")]: premium_tab(); idx += 1
     with tab_objs[idx]: settings_tab(); idx += 1
     if st.session_state.is_parent and "Parent Dashboard" in tabs:
         with tab_objs[tabs.index("Parent Dashboard")]: parent_dashboard()

@@ -7,7 +7,7 @@ import nltk
 import re
 import pathlib
 
-# Make NLTK find the bundled data
+# NLTK setup (safe, no crashes)
 _nltk_data = pathlib.Path(__file__).parent / "nltk_data"
 if _nltk_data.exists():
     nltk.data.path.append(str(_nltk_data))
@@ -42,12 +42,9 @@ class PDFParser:
         try:
             pdf_reader = PyPDF2.PdfReader(pdf_file)
             text = ""
-            
             for page in pdf_reader.pages:
                 text += page.extract_text() + "\n"
-            
             return text.strip()
-        
         except Exception as e:
             st.error(f"Error reading PDF: {str(e)}")
             return None
@@ -56,43 +53,25 @@ class PDFParser:
     def summarize_content(text: str, max_length: int = 500) -> str:
         if len(text) <= max_length:
             return text
-        
         return text[:max_length] + "..."
 
 class Translator_Utils:
     def __init__(self):
         self.translator = Translator()
         self.supported_languages = {
-            'en': 'English',
-            'es': 'Spanish',
-            'fr': 'French',
-            'de': 'German',
-            'zh-cn': 'Chinese (Simplified)',
-            'ja': 'Japanese',
-            'ko': 'Korean',
-            'ar': 'Arabic',
-            'hi': 'Hindi',
-            'pt': 'Portuguese',
-            'ru': 'Russian',
-            'it': 'Italian',
-            'nl': 'Dutch',
-            'pl': 'Polish',
-            'tr': 'Turkish',
-            'vi': 'Vietnamese',
-            'th': 'Thai',
-            'sv': 'Swedish',
-            'da': 'Danish',
-            'fi': 'Finnish'
+            'en': 'English', 'es': 'Spanish', 'fr': 'French', 'de': 'German',
+            'zh-cn': 'Chinese (Simplified)', 'ja': 'Japanese', 'ko': 'Korean',
+            'ar': 'Arabic', 'hi': 'Hindi', 'pt': 'Portuguese', 'ru': 'Russian',
+            'it': 'Italian', 'nl': 'Dutch', 'pl': 'Polish', 'tr': 'Turkish',
+            'vi': 'Vietnamese', 'th': 'Thai', 'sv': 'Swedish', 'da': 'Danish', 'fi': 'Finnish'
         }
     
     def translate_text(self, text: str, target_lang: str = 'en', source_lang: str = 'auto') -> str:
         try:
             if target_lang == source_lang or target_lang == 'en':
                 return text
-            
             translation = self.translator.translate(text, src=source_lang, dest=target_lang)
             return translation.text
-        
         except Exception as e:
             st.warning(f"Translation error: {str(e)}")
             return text
@@ -108,12 +87,7 @@ class EssayGrader:
     @staticmethod
     def grade_essay(essay_text: str, rubric: dict = None) -> dict:
         if rubric is None:
-            rubric = {
-                'grammar': 30,
-                'structure': 25,
-                'content': 25,
-                'vocabulary': 20
-            }
+            rubric = {'grammar': 30, 'structure': 25, 'content': 25, 'vocabulary': 20}
         
         scores = {}
         feedback = []
@@ -125,27 +99,23 @@ class EssayGrader:
         sentence_count = len(sentences)
         avg_sentence_length = word_count / sentence_count if sentence_count > 0 else 0
         
-        grammar_score = min(100, max(0, 100 - (abs(avg_sentence_length - 15) * 2)))
+        # Grammar score (simple)
+        grammar_score = min(100, max(0, 100 - (abs(avg_sentence_length - 20) * 2)))
         scores['grammar'] = round(grammar_score * rubric['grammar'] / 100, 1)
         
-        if sentence_count < 3:
-            feedback.append("Try to develop your ideas with more sentences.")
-        
-        paragraphs = essay_text.split('\n\n')
-        paragraph_count = len([p for p in paragraphs if p.strip()])
-        
+        # Structure (paragraph count)
+        paragraph_count = len(re.split(r'\n\s*\n', essay_text))
+        structure_score = 50
         if paragraph_count >= 3:
-            structure_score = 90
-        elif paragraph_count == 2:
-            structure_score = 70
-        else:
-            structure_score = 50
-        
+            structure_score = 80
+        if paragraph_count >= 5:
+            structure_score = 100
         scores['structure'] = round(structure_score * rubric['structure'] / 100, 1)
         
         if paragraph_count < 3:
             feedback.append("Consider organizing your essay into introduction, body, and conclusion paragraphs.")
         
+        # Content
         if word_count < 100:
             content_score = 60
             feedback.append("Your essay is quite short. Try to expand on your ideas.")
@@ -155,12 +125,11 @@ class EssayGrader:
             content_score = 85
         else:
             content_score = 95
-        
         scores['content'] = round(content_score * rubric['content'] / 100, 1)
         
+        # Vocabulary
         unique_words = len(set(word.lower() for word in words if word.isalnum()))
         vocabulary_diversity = unique_words / word_count if word_count > 0 else 0
-        
         vocabulary_score = min(100, vocabulary_diversity * 150)
         scores['vocabulary'] = round(vocabulary_score * rubric['vocabulary'] / 100, 1)
         
