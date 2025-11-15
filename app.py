@@ -76,15 +76,18 @@ def sidebar():
             st.markdown('<span style="background:#FFD700;color:#000;padding:4px 10px;border-radius:12px;font-weight:bold">PREMIUM</span>', unsafe_allow_html=True)
         streak = db.update_streak(st.session_state.user_id)
         st.markdown(f'<span style="background:linear-gradient(135deg,#FF6B6B,#FFE66D);padding:6px 14px;border-radius:20px;color:white;font-weight:bold">Streak: {streak} days</span>', unsafe_allow_html=True)
-        st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
 
-        # FIXED: Safe badges parsing
+        # FIXED: Unique key for selectbox
+        st.session_state.current_subject = st.selectbox(
+            "Subject", list(SUBJECT_PROMPTS.keys()), key="sidebar_subject_select"
+        )
+
+        st.markdown("### Badges")
         badges_raw = user.get("badges", "[]")
         try:
             badges = json.loads(badges_raw) if isinstance(badges_raw, str) else (badges_raw or [])
         except:
             badges = []
-        st.markdown("### Badges")
         for b in badges[:5]:
             st.markdown(f"**Trophy** {BADGES.get(b, b)}", unsafe_allow_html=True)
 
@@ -102,37 +105,84 @@ def chat_tab():
                 st.markdown(resp)
                 st.session_state.chat_history.append({"role": "assistant", "content": resp})
         db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, prompt, resp)
+        db.add_score(st.session_state.user_id, "chat", 10)
 
 def pdf_tab():
     st.markdown("### PDF Upload")
-    file = st.file_uploader("PDF", type="pdf")
+    file = st.file_uploader("PDF", type="pdf", key="pdf_upload")
     if file:
         with st.spinner("Reading..."):
             text = ai_engine.extract_text_from_pdf(file.read())
-        st.text_area("Text:", text, height=300)
+        st.text_area("Text:", text, height=300, key="pdf_text")
 
 def exam_tab():
     st.markdown("### Exam Prep")
     if "exam_questions" not in st.session_state:
-        subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
-        num = st.number_input("Questions", 1, 10, 5)
-        if st.button("Generate"):
+        # FIXED: Unique keys
+        subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()), key="exam_subject_select")
+        num = st.number_input("Questions", 1, 10, 5, key="exam_num_questions")
+        if st.button("Generate", key="generate_exam"):
             st.session_state.exam_questions = ai_engine.generate_exam_questions(subject, "KCSE", num)
             st.session_state.user_answers = {}
             st.rerun()
     else:
         for i, q in enumerate(st.session_state.exam_questions):
             st.markdown(f"**Q{i+1}:** {q['question']}")
-            st.session_state.user_answers[i] = st.radio("Choose", q['options'], key=f"ans{i}")
-        if st.button("Submit"):
+            st.session_state.user_answers[i] = st.radio("Choose", q['options'], key=f"exam_ans_{i}")
+        if st.button("Submit", key="submit_exam"):
             res = ai_engine.grade_mcq(st.session_state.exam_questions, st.session_state.user_answers)
+            db.add_score(st.session_state.user_id, "exam", res["percentage"])
             st.markdown(f"**Score: {res['percentage']}%**")
             for r in res["results"]:
                 icon = "Correct" if r["is_correct"] else "Wrong"
                 st.markdown(f"- {icon} **{r['question']}**")
             del st.session_state.exam_questions, st.session_state.user_answers
 
-# ────────────────────────────── MAIN (SAFE) ──────────────────────────────
+def essay_tab():
+    st.markdown("### Essay Grader")
+    essay = st.text_area("Paste your essay", height=200, key="essay_input")
+    if st.button("Grade", key="grade_essay") and essay.strip():
+        with st.spinner("Grading..."):
+            res = ai_engine.grade_essay(essay, "Kenyan curriculum")
+            db.add_score(st.session_state.user_id, "essay", res["score"])
+            st.markdown(f"**Score: {res['score']}/100** – {res['feedback']}")
+
+def premium_tab():
+    st.markdown("### Premium – KES 500/month")
+    st.info("Send to M-Pesa: `0701617120`")
+    phone = st.text_input("Phone", key="premium_phone")
+    code = st.text_input("M-Pesa Code", key="premium_code")
+    if st.button("Submit", key="submit_premium"):
+        if phone and code:
+            db.add_manual_payment(st.session_state.user_id, phone, code)
+            st.success("Submitted!")
+        else:
+            st.error("Fill both fields")
+
+def progress_tab():
+    st.markdown("### Progress")
+    st.write("Coming soon.")
+
+def settings_tab():
+    st.markdown("### Settings")
+    st.write("Theme, 2FA – coming soon.")
+
+def parent_dashboard():
+    st.markdown("### Parent Dashboard")
+    st.write("Track child – coming soon.")
+
+def admin_dashboard():
+    if not st.session_state.is_admin:
+        st.error("Access denied")
+        return
+    st.markdown("## Admin Control Centre")
+    st.write("Manage users, payments, analytics – coming soon.")
+    users = db.get_all_users() if hasattr(db, 'get_all_users') else []
+    if users:
+        df = pd.DataFrame(users)
+        st.dataframe(df[["email", "name", "role", "is_premium"]])
+
+# ────────────────────────────── MAIN ──────────────────────────────
 def main():
     try:
         init_session()
@@ -144,10 +194,31 @@ def main():
             st.info("Log in to continue.")
             return
         sidebar()
-        tab1, tab2, tab3 = st.tabs(["Chat", "PDF", "Exam"])
-        with tab1: chat_tab()
-        with tab2: pdf_tab()
-        with tab3: exam_tab()
+
+        # ALL FEATURES RESTORED
+        tabs = ["Chat Tutor", "PDF Upload", "Progress", "Exam Prep", "Essay Grader", "Settings"]
+        if not db.check_premium(st.session_state.user_id):
+            tabs.insert(5, "Premium")
+        if st.session_state.is_parent:
+            tabs.append("Parent Dashboard")
+        if st.session_state.is_admin:
+            tabs.append("Admin Control Centre")
+
+        tab_objs = st.tabs(tabs)
+        idx = 0
+        with tab_objs[idx]: chat_tab(); idx += 1
+        with tab_objs[idx]: pdf_tab(); idx += 1
+        with tab_objs[idx]: progress_tab(); idx += 1
+        with tab_objs[idx]: exam_tab(); idx += 1
+        with tab_objs[idx]: essay_tab(); idx += 1
+        if "Premium" in tabs:
+            with tab_objs[tabs.index("Premium")]: premium_tab()
+        with tab_objs[tabs.index("Settings")]: settings_tab()
+        if st.session_state.is_parent and "Parent Dashboard" in tabs:
+            with tab_objs[tabs.index("Parent Dashboard")]: parent_dashboard()
+        if st.session_state.is_admin and "Admin Control Centre" in tabs:
+            with tab_objs[tabs.index("Admin Control Centre")]: admin_dashboard()
+
     except Exception as e:
         st.error(f"APP CRASHED: {e}")
 
