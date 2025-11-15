@@ -5,24 +5,24 @@ import bcrypt
 import json
 from datetime import date
 
-# ────────────────────────────── FORCE DEBUG MODE ──────────────────────────────
+# ────────────────────────────── DEBUG MODE (TEMP) ──────────────────────────────
 st.set_page_config(page_title="LearnFlow AI", page_icon="Flag of Kenya", layout="wide")
-st.markdown("**DEBUG MODE ON** – Errors will show below", unsafe_allow_html=True)
+st.markdown("**APP LOADED – DEBUG ON**", unsafe_allow_html=True)
 
 # ────────────────────────────── LOGGING ──────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ────────────────────────────── SAFE IMPORTS (with fallback) ──────────────────────────────
+# ────────────────────────────── SAFE IMPORTS ──────────────────────────────
 try:
     from database import Database
     from ai_engine import AIEngine
     from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
 except Exception as e:
-    st.error(f"Failed to import modules: {e}")
+    st.error(f"Import failed: {e}")
     st.stop()
 
-# ────────────────────────────── CSS ──────────────────────────────
+# ────────────────────────────── CSS (FIXED: unsafe_allow_html=True) ──────────────────────────────
 st.markdown("""
 <style>
     .main-header {font-size:2.8rem; font-weight:bold;
@@ -36,11 +36,10 @@ st.markdown("""
     .premium-badge {background:#FFD700; color:#000; padding:4px 10px; border-radius:12px; font-weight:bold;}
     .tab-header {font-weight:bold; color:#009E60;}
     .premium-header {font-size:1.6rem; font-weight:bold; color:#FFD700; text-align:center;}
-    .error-box {background:#ffe6e6; padding:15px; border-left:5px solid red; border-radius:5px;}
 </style>
-""", unsafe_allow_html tas=True)
+""", unsafe_allow_html=True)  # ← FIXED: was "tas=True"
 
-# ────────────────────────────── INITIALIZERS (Safe) ──────────────────────────────
+# ────────────────────────────── INITIALIZERS ──────────────────────────────
 @st.cache_resource
 def init_db():
     try:
@@ -48,7 +47,7 @@ def init_db():
         db.conn.execute("PRAGMA journal_mode=WAL;")
         return db
     except Exception as e:
-        st.error(f"Database failed: {e}")
+        st.error(f"DB error: {e}")
         class Dummy:
             def __getattr__(self, _): return lambda *a, **k: None
             def get_leaderboard(self, _): return []
@@ -61,11 +60,11 @@ def init_ai():
     try:
         key = st.secrets.get("GEMINI_API_KEY", "")
         if not key:
-            st.warning("GEMINI_API_KEY missing – AI disabled")
+            st.warning("No GEMINI_API_KEY – AI disabled")
             return AIEngine("")
         return AIEngine(key)
     except Exception as e:
-        st.error(f"AI init failed: {e}")
+        st.error(f"AI init error: {e}")
         return AIEngine("")
 
 db = init_db()
@@ -91,7 +90,7 @@ def apply_theme():
     except:
         pass
 
-# ────────────────────────────── UI BLOCKS ──────────────────────────────
+# ────────────────────────────── WELCOME SCREEN (UNCHANGED) ──────────────────────────────
 def welcome_screen():
     st.markdown('<div class="welcome-box"><h1>LearnFlow AI</h1><p>Your Kenyan AI Tutor</p><p>KCPE • KPSEA • KJSEA • KCSE</p></div>', unsafe_allow_html=True)
     _, c, _ = st.columns([1,1,1])
@@ -100,6 +99,7 @@ def welcome_screen():
             st.session_state.show_welcome = False
             st.rerun()
 
+# ────────────────────────────── LOGIN BLOCK (UNCHANGED) ──────────────────────────────
 def login_block():
     if st.session_state.logged_in:
         return
@@ -138,6 +138,7 @@ def login_block():
 
         st.info("**Demo:** `kingmumo15@gmail.com` / `@Yoounruly10`")
 
+# ────────────────────────────── SIDEBAR (UNCHANGED) ──────────────────────────────
 def sidebar():
     try:
         with st.sidebar:
@@ -160,7 +161,7 @@ def sidebar():
     except Exception as e:
         st.sidebar.error(f"Sidebar error: {e}")
 
-# ────────────────────────────── TABS (Safe) ──────────────────────────────
+# ────────────────────────────── TABS (ALL FEATURES PRESERVED) ──────────────────────────────
 def chat_tab():
     try:
         st.markdown("### Chat Tutor")
@@ -307,8 +308,7 @@ def main():
             with tab_objs[tabs.index("Admin Dashboard")]: admin_dashboard()
 
     except Exception as e:
-        st.error(f"**APP CRASHED**: {e}")
-        st.code(f"Traceback: {e.__traceback__}", language="python")
+        st.error(f"**CRASH**: {e}")
         logger.error(f"App crash: {e}", exc_info=True)
 
 if __name__ == "__main__":
