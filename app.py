@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ────────────────────────────── CONFIG ──────────────────────────────
-st.set_page_config(page_title="LearnFlow AI", page_icon="Kenya", layout="wide")
+st.set_page_config(page_title="LearnFlow AI", page_icon="🇰🇪", layout="wide")
 
 # ────────────────────────────── CSS ──────────────────────────────
 st.markdown("""
@@ -43,7 +43,7 @@ def init_db():
         db.conn.execute("PRAGMA journal_mode=WAL;")
         return db
     except Exception as e:
-        st.error("Database failed. Using safe mode.")
+        st.error(f"Database error: {str(e)}")
         logger.error(f"DB init failed: {e}")
         class Dummy:
             def __getattr__(self, _): return lambda *a, **k: None
@@ -57,8 +57,11 @@ def init_ai():
     try:
         key = st.secrets["GEMINI_API_KEY"]
         return AIEngine(key)
+    except KeyError:
+        st.error("GEMINI_API_KEY not set in secrets – add it in Cloud Settings > Secrets.")
+        return AIEngine("")
     except Exception as e:
-        st.warning("AI disabled: Set GEMINI_API_KEY in Secrets")
+        st.error(f"AI init error: {str(e)}")
         logger.warning(f"AI init failed: {e}")
         return AIEngine("")
 

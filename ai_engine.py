@@ -5,7 +5,7 @@ import requests
 from streamlit import cache_data
 from typing import List, Dict
 import io
-import PyPDF2   # <-- pure-Python PDF reader (already in requirements.txt)
+import PyPDF2  # Pure-Python PDF reader
 
 # ==============================================================================
 # API CONFIGURATION
