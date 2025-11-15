@@ -3,7 +3,7 @@ import sqlite3
 import bcrypt
 import json
 import uuid
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import pyotp
 from typing import Optional, Dict, List
 
@@ -41,7 +41,9 @@ def ensure_schema():
         theme TEXT DEFAULT 'light',
         brightness INTEGER DEFAULT 100,
         font TEXT DEFAULT 'sans-serif',
-        discount REAL DEFAULT 0.0
+        discount REAL DEFAULT 0.0,
+        daily_questions INTEGER DEFAULT 0,
+        last_question_date TEXT
     )
     ''')
 
@@ -87,7 +89,7 @@ def ensure_schema():
     conn.close()
 
 
-ensure_schema()  # Run on import
+ensure_schema()
 
 
 class Database:
@@ -101,7 +103,7 @@ class Database:
     def commit(self):
         self.conn.commit()
 
-    # USER MANAGEMENT
+    # USER
     def create_user(self, email: str, password: str) -> Optional[str]:
         if len(password) < 6 or "@" not in email:
             return None
@@ -142,17 +144,12 @@ class Database:
         c = self._c()
         c.execute("SELECT last_streak_date, streak_days FROM users WHERE user_id = ?", (user_id,))
         row = c.fetchone()
-        if not row:
-            return 0
-        last = row["last_streak_date"]
-        streak = row["streak_days"]
+        if not row: return 0
+        last, streak = row["last_streak_date"], row["streak_days"]
         today = date.today().isoformat()
-        if last == today:
-            return streak
-        elif last == (date.today() - timedelta(days=1)).isoformat():
-            streak += 1
-        else:
-            streak = 1
+        if last == today: return streak
+        elif last == (date.today() - timedelta(days=1)).isoformat(): streak += 1
+        else: streak = 1
         c.execute("UPDATE users SET streak_days = ?, last_streak_date = ? WHERE user_id = ?", (streak, today, user_id))
         self.commit()
         return streak
@@ -162,6 +159,34 @@ class Database:
         c.execute("SELECT is_premium FROM users WHERE user_id = ?", (user_id,))
         row = c.fetchone()
         return bool(row and row["is_premium"])
+
+    def check_premium_validity(self, user_id):
+        c = self._c()
+        c.execute("SELECT submitted_at FROM manual_payments WHERE user_id = ? AND status = 'approved' ORDER BY submitted_at DESC LIMIT 1", (user_id,))
+        row = c.fetchone()
+        if not row: return False
+        approval = datetime.fromisoformat(row["submitted_at"].split()[0])
+        return datetime.now() < approval + timedelta(days=30)
+
+    def can_ask_question(self, user_id):
+        if self.check_premium(user_id) or self.get_user(user_id)["role"] == "admin":
+            return True
+        today = date.today().isoformat()
+        c = self._c()
+        c.execute("SELECT daily_questions, last_question_date FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        if not row: return False
+        count, last = row["daily_questions"], row["last_question_date"]
+        if last != today:
+            count = 0
+        count += 1
+        c.execute("UPDATE users SET daily_questions = ?, last_question_date = ? WHERE user_id = ?", (count, today, user_id))
+        self.commit()
+        return count <= 10
+
+    def is_admin(self, user_id):
+        user = self.get_user(user_id)
+        return user and user["role"] == "admin"
 
     # PAYMENTS
     def add_manual_payment(self, user_id, phone, code):
@@ -188,40 +213,6 @@ class Database:
         c.execute("UPDATE manual_payments SET status = 'rejected' WHERE id = ?", (payment_id,))
         self.commit()
 
-    # 2FA
-    def generate_2fa_secret(self, user_id):
-        secret = pyotp.random_base32()
-        c = self._c()
-        c.execute("UPDATE users SET twofa_secret = ? WHERE user_id = ?", (secret, user_id))
-        self.commit()
-        return secret
-
-    def is_2fa_enabled(self, user_id):
-        c = self._c()
-        c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
-        row = c.fetchone()
-        return bool(row and row["twofa_secret"])
-
-    def verify_2fa_code(self, user_id, code):
-        c = self._c()
-        c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
-        row = c.fetchone()
-        if not row or not row["twofa_secret"]:
-            return False
-        return pyotp.TOTP(row["twofa_secret"]).verify(code)
-
-    # CHAT & SCORES
-    def add_chat_history(self, user_id, subject, query, response):
-        c = self._c()
-        c.execute("INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?,?,?,?)",
-                  (user_id, subject, query, response))
-        self.commit()
-
-    def add_score(self, user_id, category, score):
-        c = self._c()
-        c.execute("INSERT INTO scores (user_id, category, score) VALUES (?,?,?)", (user_id, category, score))
-        self.commit()
-
     # BADGES
     def add_badge(self, user_id, badge):
         c = self._c()
@@ -233,7 +224,7 @@ class Database:
             c.execute("UPDATE users SET badges = ? WHERE user_id = ?", (json.dumps(badges), user_id))
             self.commit()
 
-    # LEADERBOARD
+    # LEADERBOARD + DISCOUNT
     def get_leaderboard(self, category):
         c = self._c()
         c.execute("""
@@ -246,8 +237,44 @@ class Database:
         """, (category,))
         return [{"email": row["email"], "score": row["total_score"]} for row in c.fetchall()]
 
+    def get_monthly_leaderboard_champion(self, category):
+        last_month = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        c = self._c()
+        c.execute("""
+        SELECT user_id, SUM(score) as total
+        FROM scores
+        WHERE category = ? AND timestamp >= ?
+        GROUP BY user_id
+        ORDER BY total DESC
+        LIMIT 1
+        """, (category, last_month))
+        row = c.fetchone()
+        return row["user_id"] if row else None
+
+    def apply_monthly_discount(self):
+        champs = set()
+        for cat in ["exam", "essay"]:
+            champ = self.get_monthly_leaderboard_champion(cat)
+            if champ: champs.add(champ)
+        for uid in champs:
+            c = self._c()
+            c.execute("UPDATE users SET discount = 0.20 WHERE user_id = ?", (uid,))
+        self.commit()
+
     # ADMIN
     def get_all_users(self):
         c = self._c()
         c.execute("SELECT user_id, email, name, role, is_premium FROM users")
         return [dict(row) for row in c.fetchall()]
+
+    # CHAT & SCORES
+    def add_chat_history(self, user_id, subject, query, response):
+        c = self._c()
+        c.execute("INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?,?,?,?)",
+                  (user_id, subject, query, response))
+        self.commit()
+
+    def add_score(self, user_id, category, score):
+        c = self._c()
+        c.execute("INSERT INTO scores (user_id, category, score) VALUES (?,?,?)", (user_id, category, score))
+        self.commit()
