@@ -45,8 +45,8 @@ def ensure_schema():
     )
     ''')
 
-    # Additional tables
-    for table_sql in [
+    # Other tables
+    for sql in [
         '''CREATE TABLE IF NOT EXISTS chat_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT, subject TEXT, user_query TEXT, ai_response TEXT,
@@ -67,9 +67,9 @@ def ensure_schema():
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP
         )'''
     ]:
-        c.execute(table_sql)
+        c.execute(sql)
 
-    # ---- FORCE RECREATE ADMIN USER ----
+    # FORCE ONLY ONE ADMIN
     admin_email = "kingmumo15@gmail.com"
     admin_pwd = "@Yoounruly10"
     c.execute("DELETE FROM users WHERE email = ?", (admin_email,))
@@ -87,8 +87,7 @@ def ensure_schema():
     conn.close()
 
 
-# Initialise on import
-ensure_schema()
+ensure_schema()  # Run on import
 
 
 class Database:
@@ -102,7 +101,7 @@ class Database:
     def commit(self):
         self.conn.commit()
 
-    # ---------- USER ----------
+    # USER MANAGEMENT
     def create_user(self, email: str, password: str) -> Optional[str]:
         if len(password) < 6 or "@" not in email:
             return None
@@ -164,9 +163,29 @@ class Database:
         row = c.fetchone()
         return bool(row and row["is_premium"])
 
+    # PAYMENTS
     def add_manual_payment(self, user_id, phone, code):
         c = self._c()
         c.execute("INSERT INTO manual_payments (user_id, phone, mpesa_code) VALUES (?,?,?)", (user_id, phone, code))
+        self.commit()
+
+    def get_pending_payments(self):
+        c = self._c()
+        c.execute("SELECT * FROM manual_payments WHERE status = 'pending'")
+        return [dict(row) for row in c.fetchall()]
+
+    def approve_manual_payment(self, payment_id):
+        c = self._c()
+        c.execute("SELECT user_id FROM manual_payments WHERE id = ?", (payment_id,))
+        row = c.fetchone()
+        if row:
+            c.execute("UPDATE users SET is_premium = 1 WHERE user_id = ?", (row["user_id"],))
+            c.execute("UPDATE manual_payments SET status = 'approved' WHERE id = ?", (payment_id,))
+        self.commit()
+
+    def reject_manual_payment(self, payment_id):
+        c = self._c()
+        c.execute("UPDATE manual_payments SET status = 'rejected' WHERE id = ?", (payment_id,))
         self.commit()
 
     # 2FA
@@ -191,7 +210,7 @@ class Database:
             return False
         return pyotp.TOTP(row["twofa_secret"]).verify(code)
 
-    # Badges, scores, etc.
+    # CHAT & SCORES
     def add_chat_history(self, user_id, subject, query, response):
         c = self._c()
         c.execute("INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?,?,?,?)",
@@ -203,12 +222,32 @@ class Database:
         c.execute("INSERT INTO scores (user_id, category, score) VALUES (?,?,?)", (user_id, category, score))
         self.commit()
 
+    # BADGES
     def add_badge(self, user_id, badge):
         c = self._c()
         c.execute("SELECT badges FROM users WHERE user_id = ?", (user_id,))
         row = c.fetchone()
-        badges = json.loads(row["badges"]) if row else []
+        badges = json.loads(row["badges"]) if row and row["badges"] else []
         if badge not in badges:
             badges.append(badge)
             c.execute("UPDATE users SET badges = ? WHERE user_id = ?", (json.dumps(badges), user_id))
             self.commit()
+
+    # LEADERBOARD
+    def get_leaderboard(self, category):
+        c = self._c()
+        c.execute("""
+        SELECT u.email, SUM(s.score) as total_score
+        FROM scores s JOIN users u ON s.user_id = u.user_id
+        WHERE s.category = ?
+        GROUP BY s.user_id
+        ORDER BY total_score DESC
+        LIMIT 10
+        """, (category,))
+        return [{"email": row["email"], "score": row["total_score"]} for row in c.fetchall()]
+
+    # ADMIN
+    def get_all_users(self):
+        c = self._c()
+        c.execute("SELECT user_id, email, name, role, is_premium FROM users")
+        return [dict(row) for row in c.fetchall()]
