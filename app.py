@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ────────────────────────────── CONFIG ──────────────────────────────
-st.set_page_config(page_title="LearnFlow AI", page_icon="KE Flag", layout="wide")
+st.set_page_config(page_title="LearnFlow AI", page_icon="🇰🇪", layout="wide")
 
 # Debug: Prove app loads
 st.markdown("**APP LOADED SUCCESSFULLY!** (No white screen)", unsafe_allow_html=True)
@@ -195,7 +195,7 @@ def pdf_tab():
             text = ai_engine.extract_text_from_pdf(uploaded_file.read())
         st.text_area("Extracted Text:", text, height=300)
     else:
-        st.info("Upload a PDF to extract text (PyPDF))")
+        st.info("Upload a PDF to extract text (PyPDF2)")
 
 def progress_tab():
     st.markdown('<span class="tab-header">### Progress</span>', unsafe_allow_html=True)
@@ -227,8 +227,8 @@ def exam_tab():
                         db.add_badge(st.session_state.user_id, "perfect_score")
                     st.balloons()
                 st.markdown(f"**Score: {res['percentage']}%**")
-                for r in127 res["results"]:
-                    icon = "Correct" if r["is_correct"] else "Wrong"
+                for r in res["results"]:
+                    icon = "✅ Correct" if r["is_correct"] else "❌ Wrong"
                     st.markdown(f"- {icon} **{r['question']}**  \n  Your: `{r['user_answer']}`  \n  Correct: `{r['correct_answer']}`  \n  {r['feedback']}")
             del st.session_state.exam_questions, st.session_state.user_answers
 
@@ -313,7 +313,7 @@ def main():
     with tab_objs[idx]: essay_tab(); idx += 1
     if "Premium" in tabs:
         with tab_objs[tabs.index("Premium")]: premium_tab()
-    with tab_objs[idx]: settings_tab(); idx += 1
+    with tab_objs[tabs.index("Settings")]: settings_tab()
     if st.session_state.is_parent and "Parent Dashboard" in tabs:
         with tab_objs[tabs.index("Parent Dashboard")]: parent_dashboard()
     if st.session_state.is_admin and "Admin Dashboard" in tabs:
