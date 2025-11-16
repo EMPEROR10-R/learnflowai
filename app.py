@@ -8,30 +8,35 @@ from database import Database
 from ai_engine import AIEngine
 from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
 
+# ────────────────────────────── MUST BE FIRST ──────────────────────────────
+st.set_page_config(
+    page_title="LearnFlow AI",
+    page_icon="KE",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # HIDE STREAMLIT UI (Git, Fork, 3 dots, Rerun, Settings, Print, About, Streamlit logo)
 hide_streamlit_style = """
 <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-    .css-1d391kg {display: none;}  /* GitHub icon */
-    .css-1v0mbdj {display: none;}  /* Fork */
-    .css-1y0t9e2 {display: none;}  /* 3 dots */
-    .css-1q8ddts {display: none;}  /* Rerun */
-    .css-1v3fvcr {display: none;}  /* Settings */
-    .css-1x8cf1d {display: none;}  /* Print */
-    .css-1v3fvcr a {display: none;} /* About */
+    .css-1d391kg {display: none;}
+    .css-1v0mbdj {display: none;}
+    .css-1y0t9e2 {display: none;}
+    .css-1q8ddts {display: none;}
+    .css-1v3fvcr {display: none;}
+    .css-1x8cf1d {display: none;}
     .css-18e3th9 {padding-top: 0rem; padding-left: 1rem; padding-right: 1rem;}
-    .css-1d391kg a {display: none;} /* Streamlit link */
+    .css-1d391kg a {display: none;}
     .css-1v0mbdj a {display: none;}
     .css-1y0t9e2 a {display: none;}
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-st.set_page_config(page_title="LearnFlow AI", page_icon="KE", layout="wide", initial_sidebar_state="expanded")
-
-# INIT
+# ────────────────────────────── INIT DB & AI ──────────────────────────────
 try:
     db = Database()
     ai_engine = AIEngine(st.secrets.get("GEMINI_API_KEY", ""))
@@ -39,7 +44,7 @@ except Exception as e:
     st.error(f"INIT FAILED: {e}")
     st.stop()
 
-# SESSION
+# ────────────────────────────── SESSION STATE ──────────────────────────────
 def init_session():
     defaults = {
         "logged_in": False, "user_id": None, "is_admin": False, "user": None,
@@ -48,13 +53,16 @@ def init_session():
         "exam_questions": None, "user_answers": {}, "exam_submitted": False
     }
     for k, v in defaults.items():
-        if k not in st.session_state: st.session_state[k] = v
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-# TIER
+# ────────────────────────────── USER TIER LOGIC ──────────────────────────────
 def get_user_tier():
-    if st.session_state.is_admin: return "admin"
+    if st.session_state.is_admin:
+        return "admin"
     user = db.get_user(st.session_state.user_id)
-    if not user: return "basic"
+    if not user:
+        return "basic"
     if user.get("is_premium") and db.check_premium_validity(st.session_state.user_id):
         return "premium"
     return "basic"
@@ -72,22 +80,16 @@ def enforce_access():
         st.stop()
 
     if tier == "basic":
-        if tab == "Chat Tutor" and not db.can_ask_question(st.session_state.user_id):
-            remaining = 10 - db.get_daily_question_count(st.session_state.user_id)
-            if remaining <= 0:
-                st.error("You've used your **10 questions** today. Upgrade to Premium for unlimited!")
-            else:
-                st.warning(f"You have **{remaining} questions** left today.")
+        q_left = 10 - db.get_daily_question_count(st.session_state.user_id)
+        p_left = 3 - db.get_daily_pdf_count(st.session_state.user_id)
+        if tab == "Chat Tutor" and q_left <= 0:
+            st.error("You've used your **10 questions** today. Upgrade to Premium!")
             st.stop()
-        if tab == "PDF Q&A" and not db.can_upload_pdf(st.session_state.user_id):
-            remaining = 3 - db.get_daily_pdf_count(st.session_state.user_id)
-            if remaining <= 0:
-                st.error("You've used your **3 PDF uploads** today. Upgrade to Premium!")
-            else:
-                st.warning(f"You have **{remaining} PDF uploads** left today.")
+        if tab == "PDF Q&A" and p_left <= 0:
+            st.error("You've used your **3 PDF uploads** today. Upgrade to Premium!")
             st.stop()
 
-# UI
+# ────────────────────────────── UI COMPONENTS ──────────────────────────────
 def welcome_screen():
     st.markdown("""
     <div style="background:linear-gradient(135deg,#009E60,#FFD700);padding:60px;border-radius:20px;text-align:center;color:white">
@@ -103,7 +105,8 @@ def welcome_screen():
             st.rerun()
 
 def login_block():
-    if st.session_state.logged_in: return
+    if st.session_state.logged_in:
+        return
 
     st.markdown("### Login / Sign Up")
     choice = st.radio("Action", ["Login", "Sign Up"], horizontal=True, label_visibility="collapsed")
@@ -140,7 +143,8 @@ def login_block():
             if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
                 st.error("Invalid 2FA code.")
                 return
-        except: pass
+        except:
+            pass
 
         db.update_user_activity(user["user_id"])
         st.session_state.update({
@@ -169,28 +173,34 @@ def sidebar():
         st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()), key="subj")
 
         badges_raw = user.get("badges", "[]")
-        try: badges = json.loads(badges_raw) if isinstance(badges_raw, str) else badges_raw
-        except: badges = []
+        try:
+            badges = json.loads(badges_raw) if isinstance(badges_raw, str) else badges_raw
+        except:
+            badges = []
         if badges:
             st.markdown("### Badges")
-            for b in badges[:5]: st.markdown(f"{BADGES.get(b, b)}")
+            for b in badges[:5]:
+                st.markdown(f"{BADGES.get(b, b)}")
 
         st.markdown("### Leaderboard")
         lb = db.get_leaderboard("exam")[:3]
-        for i, e in enumerate(lb): st.markdown(f"**{i+1}.** {e['email']} – {e['score']:.0f}")
+        for i, e in enumerate(lb):
+            st.markdown(f"**{i+1}.** {e['email']} – {e['score']:.0f}")
 
-# TABS
+# ────────────────────────────── TAB FUNCTIONS ──────────────────────────────
 def chat_tab():
     st.session_state.current_tab = "Chat Tutor"
     enforce_access()
     for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]): st.markdown(msg["content"])
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
     if prompt := st.chat_input("Ask anything..."):
         if not db.can_ask_question(st.session_state.user_id):
             st.error("Daily limit reached.")
             return
         st.session_state.chat_history.append({"role": "user", "content": prompt})
-        with st.chat_message("user"): st.markdown(prompt)
+        with st.chat_message("user"):
+            st.markdown(prompt)
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 context = st.session_state.pdf_text[-2000:] if st.session_state.pdf_text else ""
@@ -204,13 +214,11 @@ def chat_tab():
 def pdf_tab():
     st.session_state.current_tab = "PDF Q&A"
     enforce_access()
-    if not db.can_upload_pdf(st.session_state.user_id):
-        remaining = 3 - db.get_daily_pdf_count(st.session_state.user_id)
-        if remaining <= 0:
-            st.error("You've used your **3 PDF uploads** today. Upgrade to Premium!")
-        else:
-            st.warning(f"You have **{remaining} PDF uploads** left today.")
+    remaining = 3 - db.get_daily_pdf_count(st.session_state.user_id)
+    if remaining <= 0:
+        st.error("You've used your **3 PDF uploads** today. Upgrade to Premium!")
         return
+    st.info(f"You have **{remaining} PDF uploads** left today.")
     file = st.file_uploader("Upload PDF", type="pdf")
     if file and not st.session_state.pdf_text:
         with st.spinner("Reading..."):
@@ -219,7 +227,8 @@ def pdf_tab():
             st.success("PDF loaded!")
     if st.session_state.pdf_text:
         if q := st.chat_input("Ask about PDF..."):
-            with st.chat_message("user"): st.markdown(q)
+            with st.chat_message("user"):
+                st.markdown(q)
             with st.chat_message("assistant"):
                 with st.spinner("Answering..."):
                     resp = ai_engine.generate_response(q, f"Text:\n{st.session_state.pdf_text[-3000:]}")
@@ -255,7 +264,8 @@ def exam_tab():
                 res = ai_engine.grade_mcq(st.session_state.exam_questions, st.session_state.user_answers)
                 score = res["percentage"]
                 db.add_score(st.session_state.user_id, "exam", score)
-                if score >= 90: db.add_badge(st.session_state.user_id, "exam_master")
+                if score >= 90:
+                    db.add_badge(st.session_state.user_id, "exam_master")
                 st.markdown(f"## Score: {score}%")
                 for r in res["results"]:
                     icon = "Correct" if r["is_correct"] else "Wrong"
@@ -275,21 +285,18 @@ def essay_tab():
         res = ai_engine.grade_essay(essay, "Kenyan curriculum")
         score = res["score"]
         db.add_score(st.session_state.user_id, "essay", score)
-        if score >= 90: db.add_badge(st.session_state.user_id, "essay_expert")
+        if score >= 90:
+            db.add_badge(st.session_state.user_id, "essay_expert")
         st.markdown(f"**Score: {score}/100** – {res['feedback']}")
 
 def settings_tab():
     st.session_state.current_tab = "Settings"
     st.markdown("### Settings")
 
-    # Theme
     theme = st.selectbox("Theme", ["Light", "Dark"], key="theme")
-
-    # Font
     fonts = ["Sans-serif", "Serif", "Monospace", "Arial", "Courier New", "Georgia", "Times New Roman", "Verdana"]
     st.selectbox("Font", fonts, key="font")
 
-    # 2FA
     st.markdown("### 2FA")
     if st.button("Enable 2FA"):
         secret = db.enable_2fa(st.session_state.user_id)
@@ -301,7 +308,6 @@ def settings_tab():
             db.disable_2fa(st.session_state.user_id)
             st.success("2FA Disabled")
 
-    # History
     st.markdown("### Chat History")
     history = db.get_chat_history(st.session_state.user_id)
     for h in history[-10:]:
@@ -316,7 +322,8 @@ def premium_tab():
     discount = user.get("discount", 0) if user else 0
     price = 500 * (1 - discount)
     st.markdown(f"### Price: **KES {price:.0f}**")
-    if discount: st.success("20% Discount!")
+    if discount:
+        st.success("20% Discount!")
     st.info("Send to M-Pesa: `0701617120`")
     phone = st.text_input("Phone", key="pphone")
     code = st.text_input("Code", key="pcode")
@@ -332,12 +339,10 @@ def admin_dashboard():
 
     st.markdown("## Admin Control Centre")
 
-    # Users Table
     users = db.get_all_users()
     df = pd.DataFrame(users)
     edited = st.data_editor(df, num_rows="dynamic")
 
-    # Ban / Upgrade
     for idx, row in edited.iterrows():
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -350,7 +355,6 @@ def admin_dashboard():
             if st.button(f"Downgrade {row['email']}", key=f"down_{row['user_id']}"):
                 db.downgrade_to_basic(row['user_id'])
 
-    # Pending Payments
     st.markdown("### Pending Payments")
     payments = db.get_pending_payments()
     if payments:
@@ -367,13 +371,17 @@ def admin_dashboard():
                     db.reject_manual_payment(p['id'])
                     st.rerun()
 
-# MAIN
+# ────────────────────────────── MAIN APP ──────────────────────────────
 def main():
     try:
         init_session()
-        if st.session_state.show_welcome: welcome_screen(); return
+        if st.session_state.show_welcome:
+            welcome_screen()
+            return
         login_block()
-        if not st.session_state.logged_in: st.info("Log in."); return
+        if not st.session_state.logged_in:
+            st.info("Please log in to continue.")
+            return
         sidebar()
         enforce_access()
 
@@ -388,7 +396,7 @@ def main():
         if st.session_state.is_admin:
             tabs.append("Admin Control Centre")
 
-        tab_objs = st.tabs(tabs)
+        tab_objects = st.tabs(tabs)
         tab_map = {
             "Chat Tutor": chat_tab,
             "Settings": settings_tab,
@@ -398,11 +406,14 @@ def main():
             "Premium": premium_tab,
             "Admin Control Centre": admin_dashboard
         }
-        for tab_name, tab_obj in zip(tabs, tab_objs):
+
+        for tab_name, tab_obj in zip(tabs, tab_objects):
             with tab_obj:
                 tab_map[tab_name]()
+
     except Exception as e:
-        st.error(f"CRASH: {e}")
+        st.error(f"APP CRASHED: {e}")
+        st.write("Please refresh or contact support.")
 
 if __name__ == "__main__":
     main()
