@@ -1,4 +1,4 @@
-# database.py - FIXED: Robust update_streak and full feature compatibility
+# database.py - FIXED: Schema compatibility for chat_history
 import sqlite3
 import bcrypt
 import json
@@ -9,12 +9,12 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 
 class Database:
-    def __init__(self, db_path: str = "prepke.db"): # Changed DB file name
+    def __init__(self, db_path: str = "prepke.db"):
         self.db_path = db_path
-        # Ensures cross-platform compatibility for Streamlit concurrency
         self.conn = sqlite3.connect(db_path, check_same_thread=False) 
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
+        self._alter_tables_for_compatibility() # NEW: Ensures all columns exist
 
     def _create_tables(self):
         self.conn.executescript("""
@@ -54,8 +54,8 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             subject TEXT,
-            user_query TEXT,
-            ai_response TEXT,
+            user_query TEXT,            -- This is the column that might be missing
+            ai_response TEXT,           -- This is the column that might be missing
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
         );
@@ -83,6 +83,21 @@ class Database:
         );
         """)
         self.conn.commit()
+
+    def _alter_tables_for_compatibility(self):
+        """Checks for and adds missing columns to existing tables."""
+        cursor = self.conn.cursor()
+        
+        # FIX: Ensure chat_history has user_query and ai_response
+        try:
+            cursor.execute("SELECT user_query, ai_response FROM chat_history LIMIT 1")
+        except sqlite3.OperationalError as e:
+            if 'no such column: user_query' in str(e):
+                self.conn.execute("ALTER TABLE chat_history ADD COLUMN user_query TEXT")
+                self.conn.execute("ALTER TABLE chat_history ADD COLUMN ai_response TEXT")
+                self.conn.commit()
+                
+        cursor.close()
 
     # ==============================================================================
     # USER MANAGEMENT (Kept for completeness)
@@ -156,7 +171,7 @@ class Database:
             (user_id, secret)
         )
         self.conn.commit()
-        return secret, self.get_2fa_qr(user_id) # The QR code generation requires this structure
+        return secret, self.get_2fa_qr(user_id) 
 
     def get_2fa_qr(self, user_id: int):
         user = self.get_user(user_id)
@@ -239,14 +254,8 @@ class Database:
         )
         self.conn.commit()
 
-    def reset_spendable_progress(self, user_id: int):
-        self.conn.execute("UPDATE users SET spendable_xp = 0 WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
     def update_streak(self, user_id: int) -> int:
-        """
-        FIXED: Robustly handles NULL last_streak_date for new users.
-        """
+        """Handles streak updates and returns the new streak."""
         user = self.get_user(user_id)
         if not user: return 0
             
@@ -260,7 +269,6 @@ class Database:
             last_streak_date = date.fromisoformat(last_streak_date_str)
             
             if last_streak_date == today:
-                # Already checked in today, no change
                 return current_streak
             
             yesterday = today - timedelta(days=1)
@@ -268,18 +276,15 @@ class Database:
             if last_streak_date == yesterday:
                 new_streak += 1
             else:
-                # Break in streak or first login of the day after a break
                 new_streak = 1
         else:
-            # First time logging streak
             new_streak = 1
 
         self.conn.execute(
             "UPDATE users SET streak = ?, last_streak_date = ? WHERE user_id = ?",
             (new_streak, today.isoformat(), user_id)
         )
-        # Daily streak bonus XP
-        self.add_xp(user_id, 20, spendable=False) 
+        # Award daily streak bonus XP here if needed (e.g., self.add_xp(user_id, 20))
         self.conn.commit()
         return new_streak
 

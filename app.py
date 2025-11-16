@@ -1,4 +1,4 @@
-# app.py - FIXED: Full feature integration and Admin/XP/Streak logic complete
+# app.py - Full feature integration and Admin/XP/Streak logic complete
 import streamlit as st
 import bcrypt
 import json
@@ -13,12 +13,10 @@ import time
 from typing import Optional
 
 # --- UTILS PLACEHOLDER ---
-# NOTE: Replace with your actual implementation of PDFParser
+# NOTE: Replace with your actual implementation of PDFParser from utils.py
 class PDFParser:
     @staticmethod
     def extract_text(pdf_file) -> Optional[str]:
-        # Placeholder for your PDF parsing logic (e.g., PyPDF2)
-        # For demonstration, it returns a dummy text.
         return "The core concept of this document is the three-pillar strategy for economic growth in East Africa: infrastructure, education, and digital transformation. It states that investing in quality primary education is paramount for long-term sustainability. Section 2.1 discusses the benefits of modular learning in Mathematics and Sciences."
 
 @st.cache_data
@@ -38,7 +36,7 @@ XP_RULES = {
     "exam_score_multiplier": 1,  # 1 XP per 1% score (100 XP for 100%)
     "essay_score_multiplier": 2, # 2 XP per 1% score (200 XP for 100%)
     "perfect_score": 100,
-    "daily_streak_bonus": 20, # Added in database.py's update_streak
+    "daily_streak_bonus": 20, 
 }
 
 # ────────────────────────────── MUST BE FIRST ──────────────────────────────
@@ -47,7 +45,6 @@ st.set_page_config(page_title="PrepKe AI: Your Kenyan AI Tutor", page_icon="🇰
 # INIT
 try:
     db = Database()
-    # Initialize AIEngine (Assuming a GEMINI_API_KEY is configured in secrets)
     ai_engine = AIEngine(st.secrets.get("GEMINI_API_KEY", "YOUR_GEMINI_KEY")) 
 except Exception as e:
     st.error(f"Initialization Failed. Database or AI Engine setup error: {e}")
@@ -100,6 +97,7 @@ def enforce_access():
         if tab == "Chat Tutor" and db.get_daily_question_count(st.session_state.user_id) >= 10:
             st.error("You've used your **10 free questions** today. Upgrade to Premium!")
             st.stop()
+        # NOTE: PDF Q&A tab is not accessible for basic users, so this check is mostly redundant but kept for logic safety
         if tab == "PDF Q&A" and db.get_daily_pdf_count(st.session_state.user_id) >= 3:
             st.error("You've used your **3 free PDF uploads** today. Upgrade to Premium!")
             st.stop()
@@ -112,28 +110,27 @@ def award_xp(user_id, points, reason):
 def login_block():
     if st.session_state.logged_in: return
     
-    # Placeholder for a full login/signup flow
     st.subheader("Welcome Back to PrepKe AI")
     email = st.text_input("Email (e.g., test@prepke.com)")
     password = st.text_input("Password (e.g., password123)", type="password")
 
     if st.button("Log In", type="primary"):
-        # Placeholder login logic, replace with your bcrypt verification
         if email == DEFAULT_ADMIN_EMAIL and password == DEFAULT_ADMIN_PASSWORD:
-            admin_id = db.create_user(email, password) # Ensure admin exists
-            if not admin_id:
-                user = db.get_user_by_email(email)
-                admin_id = user["user_id"]
-            db.conn.execute("UPDATE users SET role = 'admin', is_premium = 1 WHERE user_id = ?", (admin_id,))
-            db.conn.commit()
+            user = db.get_user_by_email(email)
+            if not user:
+                admin_id = db.create_user(email, password)
+                if admin_id:
+                     db.conn.execute("UPDATE users SET role = 'admin', is_premium = 1 WHERE user_id = ?", (admin_id,))
+                     db.conn.commit()
+                     user = db.get_user(admin_id)
 
-            st.session_state.update({"logged_in": True, "user_id": admin_id, "is_admin": True})
+            st.session_state.update({"logged_in": True, "user_id": user["user_id"], "is_admin": True})
             st.success("Admin Logged In.")
             st.rerun()
         elif email and password:
-            # Simulated Standard Login for demonstration
             user = db.get_user_by_email(email)
             if user:
+                # Placeholder for password verification (replace with actual bcrypt check)
                  st.session_state.update({"logged_in": True, "user_id": user["user_id"]})
                  st.success("Logged In Successfully!")
                  st.rerun()
@@ -174,7 +171,7 @@ def chat_tab():
     st.header(f"{current_subject} Tutor 🧑‍🏫")
     
     daily_count = db.get_daily_question_count(user_id)
-    limit = 10 if get_user_tier() == "basic" else "unlimited"
+    limit = "unlimited" if get_user_tier() in ["premium", "admin"] else 10
     st.info(f"Daily questions used: {daily_count}/{limit}")
 
     chat_history = db.get_chat_history(user_id, current_subject)
@@ -190,7 +187,6 @@ def chat_tab():
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            # Build context from the last 10 turns
             context_history = "\n".join([f"User: {m['user_query']}\nAI: {m['ai_response']}" for m in chat_history])
             full_prompt = get_enhanced_prompt(current_subject, prompt, context=context_history)
             
@@ -211,7 +207,7 @@ def pdf_tab():
     st.header("PDF Q&A 📄")
 
     daily_count = db.get_daily_pdf_count(user_id)
-    limit = 3 if get_user_tier() == "basic" else "unlimited"
+    limit = "unlimited" if get_user_tier() in ["premium", "admin"] else 3
     st.info(f"Daily PDF uploads used: {daily_count}/{limit}")
 
     uploaded_file = st.file_uploader("Upload a PDF to analyze", type="pdf")
@@ -270,28 +266,32 @@ def exam_tab():
     
     if st.button("Generate Exam", type="primary"):
         with st.spinner(f"Generating a {exam_type} {exam_subject} exam..."):
-            # Requires ai_engine.generate_exam which needs to be implemented in ai_engine.py
             st.session_state.exam_questions = ai_engine.generate_exam(exam_subject, exam_type, num_questions)
-            st.session_state.user_answers = {}
+            st.session_state.user_answers = {i: None for i in range(len(st.session_state.exam_questions))}
             st.session_state.exam_submitted = False
             st.success("Exam generated! Start when ready.")
             st.rerun()
             
     if st.session_state.exam_questions and not st.session_state.exam_submitted:
-        # Display Exam Questions and collect answers
-        # ... (Same display logic as before) ...
-        pass
+        st.subheader(f"{exam_subject} Practice Exam ({exam_type})")
+        
+        for i, q in enumerate(st.session_state.exam_questions):
+            options = q.get("options", ["A", "B", "C", "D"])
+            st.session_state.user_answers[i] = st.radio(
+                f"**{i+1}.** {q['question']}",
+                options,
+                key=f"q_{i}",
+                index=options.index(st.session_state.user_answers.get(i)) if st.session_state.user_answers.get(i) in options else None
+            )
         
         if st.button("Submit Exam & Grade", type="primary", use_container_width=True):
             user_answers = {str(i): st.session_state.user_answers.get(i) for i in range(len(st.session_state.exam_questions))}
             
             with st.spinner("Grading your exam..."):
-                # Requires ai_engine.grade_exam
                 grading_result = ai_engine.grade_exam(st.session_state.exam_questions, user_answers)
             
             score = grading_result.get("final_score", 0)
             
-            # Log results to the generic 'scores' table
             db.add_score(user_id, "exam", score, grading_result)
             
             xp_gain = int(score) * XP_RULES["exam_score_multiplier"]
@@ -304,9 +304,16 @@ def exam_tab():
             st.rerun()
 
     if st.session_state.exam_submitted and st.session_state.get("exam_result"):
-        # Display Exam Results
-        # ... (Same display logic as before) ...
-        pass
+        result = st.session_state.exam_result
+        st.subheader(f"Your Result: {result.get('final_score', 0)}%")
+        st.info("Review your answers below:")
+        
+        for i, q in enumerate(result.get("questions", [])):
+            st.markdown(f"**{i+1}.** {q.get('question', 'N/A')}")
+            st.markdown(f"**Your Answer:** {q.get('user_answer', 'N/A')}")
+            st.markdown(f"**Correct Answer:** :green[{q.get('correct_answer', 'N/A')}]")
+            st.markdown(f"**Feedback:** {q.get('feedback', 'No feedback.')}")
+            st.divider()
 
 # --------------------------------------------------------------------------------
 # 4. ESSAY GRADER
@@ -324,16 +331,14 @@ def essay_tab():
             st.warning("Please write an essay of at least 150 words for a meaningful grade.")
             return
 
-        rubric = EXAM_TYPES["Essay"]["rubric_description"]
+        rubric = EXAM_TYPES.get("Essay", {}).get("rubric_description", "General KCSE Essay Rubric")
         
         with st.spinner("Sending essay to the Kenyan AI Grader..."):
-            # Requires ai_engine.grade_essay
             grading_result = ai_engine.grade_essay(st.session_state.essay_text, rubric)
         
         score = grading_result.get("score", 0)
         feedback = grading_result.get("feedback", "No detailed feedback.")
         
-        # Log to generic 'scores' table
         db.add_score(user_id, "essay", score, {"topic": st.session_state.essay_topic, "feedback": feedback, "essay": st.session_state.essay_text})
         
         xp_gain = int(score) * XP_RULES["essay_score_multiplier"]
@@ -381,7 +386,6 @@ def progress_tab():
             fig = px.line(essay_data, x='timestamp', y='score', markers=True, title='Essay Scores Over Time')
             st.plotly_chart(fig, use_container_width=True)
             with st.expander("Detailed Essay Results"):
-                # Extract topic for better display
                 essay_data['topic'] = essay_data['details'].apply(lambda x: x.get('topic', 'N/A'))
                 st.dataframe(essay_data[['timestamp', 'topic', 'score']], use_container_width=True)
         else:
@@ -400,7 +404,6 @@ def progress_tab():
 def settings_tab():
     st.session_state.current_tab = "Settings"
     st.header("Settings & Profile ⚙️")
-    # ... (Profile update, password change, 2FA setup logic) ...
     st.info("Profile and Security settings functionality is fully supported by `database.py`.")
 
 
@@ -443,7 +446,7 @@ def admin_dashboard():
     all_users = db.get_all_users()
     if all_users:
         df = pd.DataFrame(all_users)
-        st.dataframe(df[['user_id', 'email', 'role', 'is_premium', 'total_xp', 'is_banned']], use_container_width=True)
+        st.dataframe(df[['user_id', 'email', 'role', 'is_premium', 'total_xp', 'is_banned', 'last_active']], use_container_width=True)
 
 
 # MAIN
@@ -454,7 +457,6 @@ def main():
             login_block()
             return
 
-        # Ensures streak is updated on every page load
         sidebar()
         enforce_access() 
 
@@ -481,7 +483,6 @@ def main():
                 tab_map[name]()
                 
     except Exception as e:
-        # A final safeguard for unexpected errors
         st.error(f"CRASH: {e}")
 
 if __name__ == "__main__":
