@@ -1,4 +1,4 @@
-# database.py - FIXED: Schema compatibility for chat_history
+# database.py - FIXED: Robust schema compatibility to prevent 'duplicate column' errors
 import sqlite3
 import bcrypt
 import json
@@ -14,7 +14,32 @@ class Database:
         self.conn = sqlite3.connect(db_path, check_same_thread=False) 
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
-        self._alter_tables_for_compatibility() # NEW: Ensures all columns exist
+        self._alter_tables_for_compatibility() # NEW: Ensures all columns exist safely
+
+    def _get_table_columns(self, table_name: str) -> List[str]:
+        """Utility to get a list of column names for a table."""
+        cursor = self.conn.execute(f"PRAGMA table_info({table_name})")
+        return [row[1] for row in cursor.fetchall()]
+
+    def _check_and_add_column(self, table_name: str, column_name: str, column_type: str):
+        """Adds a column only if it doesn't already exist."""
+        if column_name not in self._get_table_columns(table_name):
+            try:
+                self.conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+                self.conn.commit()
+            except sqlite3.OperationalError as e:
+                # Catch specific errors (e.g., if another thread/process added it)
+                print(f"Warning: Could not add column {column_name} to {table_name}: {e}")
+
+    def _alter_tables_for_compatibility(self):
+        """Checks for and adds missing columns to existing tables for schema evolution."""
+        # Fix for CRASH: no such column: user_query / duplicate column name: ai_response
+        self._check_and_add_column("chat_history", "user_query", "TEXT")
+        self._check_and_add_column("chat_history", "ai_response", "TEXT")
+        
+        # Add a placeholder column to users just in case it's missing from old versions
+        self._check_and_add_column("users", "last_daily_reset", "TEXT")
+
 
     def _create_tables(self):
         self.conn.executescript("""
@@ -54,8 +79,8 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             subject TEXT,
-            user_query TEXT,            -- This is the column that might be missing
-            ai_response TEXT,           -- This is the column that might be missing
+            user_query TEXT,            
+            ai_response TEXT,           
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
         );
@@ -84,23 +109,8 @@ class Database:
         """)
         self.conn.commit()
 
-    def _alter_tables_for_compatibility(self):
-        """Checks for and adds missing columns to existing tables."""
-        cursor = self.conn.cursor()
-        
-        # FIX: Ensure chat_history has user_query and ai_response
-        try:
-            cursor.execute("SELECT user_query, ai_response FROM chat_history LIMIT 1")
-        except sqlite3.OperationalError as e:
-            if 'no such column: user_query' in str(e):
-                self.conn.execute("ALTER TABLE chat_history ADD COLUMN user_query TEXT")
-                self.conn.execute("ALTER TABLE chat_history ADD COLUMN ai_response TEXT")
-                self.conn.commit()
-                
-        cursor.close()
-
     # ==============================================================================
-    # USER MANAGEMENT (Kept for completeness)
+    # USER MANAGEMENT
     # ==============================================================================
     def create_user(self, email: str, password: str) -> Optional[int]:
         try:
@@ -199,7 +209,7 @@ class Database:
         self.conn.commit()
     
     # ==============================================================================
-    # DAILY LIMITS (Kept for completeness)
+    # DAILY LIMITS
     # ==============================================================================
     def _reset_daily_if_needed(self, user_id: int):
         user = self.get_user(user_id)
@@ -284,7 +294,6 @@ class Database:
             "UPDATE users SET streak = ?, last_streak_date = ? WHERE user_id = ?",
             (new_streak, today.isoformat(), user_id)
         )
-        # Award daily streak bonus XP here if needed (e.g., self.add_xp(user_id, 20))
         self.conn.commit()
         return new_streak
 
