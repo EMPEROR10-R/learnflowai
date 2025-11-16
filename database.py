@@ -108,7 +108,7 @@ class Database:
         """)
 
     # ==============================================================================
-    # USER AUTHENTICATION & RETRIEVAL (Includes crash fixes)
+    # USER AUTHENTICATION & RETRIEVAL
     # ==============================================================================
     
     def get_user_by_email(self, email: str) -> Optional[Dict]:
@@ -131,7 +131,7 @@ class Database:
         return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     
     # ==============================================================================
-    # 2FA RETRIEVAL (New function for password reset)
+    # 2FA RETRIEVAL
     # ==============================================================================
 
     def get_2fa_secret(self, user_id: int) -> Optional[str]:
@@ -141,7 +141,7 @@ class Database:
 
 
     # ==============================================================================
-    # USER ACCOUNT MANAGEMENT
+    # USER ACCOUNT MANAGEMENT (FIXED: update_last_active is here)
     # ==============================================================================
 
     def upgrade_to_premium(self, user_id: int):
@@ -153,6 +153,7 @@ class Database:
         self.conn.commit()
 
     def update_last_active(self, user_id: int):
+        """Updates the last_active timestamp for the user."""
         self.conn.execute(
             "UPDATE users SET last_active = ? WHERE user_id = ?",
             (datetime.now().isoformat(), user_id)
@@ -208,8 +209,6 @@ class Database:
         self.conn.execute("UPDATE payments SET status = 'approved' WHERE id = ?", (payment_id,))
         row = self.conn.execute("SELECT user_id FROM payments WHERE id = ?", (payment_id,)).fetchone()
         if row:
-            # Note: The original code used row["user_id"] which may fail if row is not dict-like
-            # We assume the row_factory (sqlite3.Row) handles this, but use dict(row) for safety
             self.upgrade_to_premium(dict(row)["user_id"]) 
         self.conn.commit()
 

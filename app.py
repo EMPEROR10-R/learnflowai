@@ -11,8 +11,26 @@ from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
 import pyotp 
 
 # ==============================================================================
-# ANIMATION & STYLING (NON-STATIC LOGIN PAGE)
+# UI CLEANUP & ANIMATION 🧹
 # ==============================================================================
+
+# CSS to hide:
+# 1. The three-dot Main Menu (#MainMenu)
+# 2. The Streamlit Crown/Watermark in the footer (footer)
+# 3. The GitHub 'Fork' symbol at the top right (.st-emotion-cache-1jm6hrl)
+HIDE_STREAMLIT_UI = """
+<style>
+/* Hide the three-dot Main Menu */
+#MainMenu {visibility: hidden;}
+
+/* Hide the footer (where the 'Made with Streamlit' Crown usually sits) */
+footer {visibility: hidden;} 
+
+/* Hide the GitHub/Git symbol (often rendered as a specific class) */
+.st-emotion-cache-1jm6hrl {visibility: hidden;} 
+.st-emotion-cache-1h9z3y {visibility: hidden;} /* Another common class for top-right symbols */
+</style>
+"""
 
 # Simple CSS-based animation for a non-static login page banner
 ANIMATION_CSS = """
@@ -66,7 +84,6 @@ def init_session():
     if 'db' not in st.session_state:
         st.session_state.db = Database()
     if 'ai_engine' not in st.session_state:
-        # Assuming GEMINI_API_KEY is available in st.secrets
         st.session_state.ai_engine = AIEngine(gemini_key=st.secrets.get("GEMINI_API_KEY", "")) 
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
@@ -139,12 +156,11 @@ def forgot_password_block():
         if st.button("Check Account"):
             user = db.get_user_by_email(reset_email)
             if user:
-                # Check if 2FA is enabled for the user
                 secret = db.get_2fa_secret(user['user_id'])
                 if secret:
                     st.session_state.reset_user_id = user['user_id']
                     st.success("Account found! Proceed to 2FA verification below.")
-                    st.rerun() # Rerun to move to the next step
+                    st.rerun() 
                 else:
                     st.error("2FA is not enabled for this account. Please contact support.")
             else:
@@ -157,7 +173,7 @@ def forgot_password_block():
 
     # Step 2: 2FA Verification and New Password Input
     user_id = st.session_state.reset_user_id
-    secret = db.get_2fa_secret(user_id) # Retrieve the secret again
+    secret = db.get_2fa_secret(user_id) 
 
     st.subheader("2. Verify and Set New Password")
     
@@ -182,7 +198,6 @@ def forgot_password_block():
                         update_password(user_id, new_password)
                         st.success("✅ Password successfully reset! You can now log in.")
                         
-                        # Cleanup session state and redirect to login
                         st.session_state.show_forgot_password = False
                         st.session_state.reset_user_id = None
                         st.session_state.logged_in = False
@@ -205,7 +220,6 @@ def forgot_password_block():
 def login_block():
     """
     Handles the login/registration forms.
-    Shows the Forgot Password link ONLY on failed login.
     """
     db = st.session_state.db
     
@@ -224,7 +238,7 @@ def login_block():
             submitted = st.form_submit_button("Log In")
 
             if submitted:
-                st.session_state.show_forgot_password = False # Reset flag on new attempt
+                st.session_state.show_forgot_password = False 
                 if not email or not password:
                     st.error("Please enter both email and password.")
                 else:
@@ -236,7 +250,6 @@ def login_block():
                         if user:
                             password_hash_bytes = user['password_hash']
                             
-                            # CRASH FIX: Ensure hash is in bytes format for bcrypt
                             if isinstance(password_hash_bytes, str):
                                 password_hash_bytes = password_hash_bytes.encode('utf-8')
                             
@@ -244,7 +257,6 @@ def login_block():
                                 if bcrypt.checkpw(password.encode('utf-8'), password_hash_bytes):
                                     is_authenticated = True
                             except Exception:
-                                # Catch potential error if hash is corrupt or malformed
                                 pass
                         
                         if is_authenticated:
@@ -253,17 +265,15 @@ def login_block():
                             st.session_state.email = user['email']
                             st.session_state.user_data = user
                             st.session_state.show_welcome = False
-                            db.update_last_active(user['user_id'])
+                            db.update_last_active(user['user_id']) 
                             st.success("Login successful!")
                             st.rerun()
                         else:
                             st.error("Invalid email or password.")
                             st.session_state.logged_in = False
                             st.session_state.user_data = None
-                            # Show forgot password link ONLY on failed login
                             st.session_state.show_forgot_password = True
 
-        # Forgotten Password Link (Visible only after a failed login attempt)
         if st.session_state.show_forgot_password:
             if st.button("Forgot Password? Use 2FA Reset", key="forgot_pw_link"):
                 st.session_state.show_forgot_password = True
@@ -309,16 +319,18 @@ def logout():
     st.rerun()
 
 # ==============================================================================
-# UI COMPONENTS (FIXES: apply_theme is now defined)
+# UI COMPONENTS
 # ==============================================================================
 
 def apply_theme():
-    """FIXED: Sets the Streamlit page configuration."""
+    """Sets the Streamlit page configuration and hides UI elements."""
     st.set_page_config(
         page_title="PrepKe AI Tutor",
         layout="wide",
         initial_sidebar_state="expanded"
     )
+    # Inject CSS to hide the menu, watermark, and GitHub/Git symbol
+    st.markdown(HIDE_STREAMLIT_UI, unsafe_allow_html=True) 
 
 def welcome_screen():
     st.title("PrepKe AI: Your Kenyan Curriculum Expert")
@@ -360,24 +372,21 @@ def admin_dashboard(): st.info("Admin Dashboard content goes here...")
 def main():
     try:
         init_session()
-        apply_theme() # This call is now correctly defined
+        apply_theme()
 
         if st.session_state.show_welcome: 
             welcome_screen()
             return
         
-        # Priority 1: Handle password reset flow
         if st.session_state.show_forgot_password:
             forgot_password_block()
             return
 
-        # Priority 2: Handle login/register flow
         if not st.session_state.logged_in: 
             login_block()
             st.info("Log in to start learning! 📖") 
             return
         
-        # Priority 3: Main App Content
         sidebar()
         enforce_access()
         
