@@ -172,7 +172,12 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
 ]
 """
         try:
-            response = self.generate_response(prompt, "You are a quiz generator. Output only JSON.")
+            # Use grounding for potentially factual/current affairs subjects for accuracy
+            use_grounding = subject in ["History and Government", "Geography", "Business Studies"]
+            response = self.generate_response_gemini([{"role": "user", "parts": [{"text": prompt}]}], 
+                                                     "You are a quiz generator. Output only JSON.", 
+                                                     use_grounding=use_grounding)
+            
             json_str = response.strip()
             if json_str.startswith("```json"):
                 json_str = json_str[7:-3]
@@ -203,13 +208,10 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
             correct_ans = q["correct_answer"].strip()
             is_correct = user_ans == correct_ans
             score = 100 if is_correct else 0
-            if not is_correct and user_ans:
-                partial_prompt = f"Is '{user_ans}' partially correct compared to '{correct_ans}'? Score 0-50."
-                partial_resp = self.generate_response(partial_prompt, "Quick partial grader.")
-                try:
-                    score = int(partial_resp.split()[0])
-                except:
-                    score = 0
+            
+            # Simplified partial grading fallback, rely only on AI grading for complex tasks.
+            # Removed the partial grading AI call for simplicity/speed in this context.
+            
             total_score += score
             if is_correct:
                 correct += 1
@@ -233,6 +235,7 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
     # EXAM / GRADING / SUMMARY
     # --------------------------------------------------------------------------
     def generate_exam_questions(self, subject, exam_type, num_questions):
+        # Can be enhanced later to use exam_type for question style
         return self.generate_mcq_questions(subject, num_questions)
 
     def grade_short_answer(self, question, model_answer, user_answer):
@@ -241,22 +244,25 @@ Compare user answer to model answer for question: {question}
 Model: {model_answer}
 User: {user_answer}
 
-Score 0-100 on accuracy, completeness. Output JSON: {{"score": int, "feedback": "Explanation."}}
+**Instruction:** You are an expert Kenyan curriculum grader. Score 0-100 on accuracy, completeness, and adherence to Kenyan exam standards (e.g., using relevant local examples or context).
+Output **only JSON**: {{"score": int, "feedback": "Explanation."}}
 """
         try:
-            response = self.generate_response(prompt, "You are a precise short-answer grader. Focus on key facts and semantics.")
+            response = self.generate_response(prompt, "You are a precise short-answer grader. Focus on key facts and semantics and Kenyan curriculum standards.")
             json_str = response.strip().replace("```json", "").replace("```", "")
             result = json.loads(json_str)
             return result
-        except:
-            return {"score": 50 if len(user_answer) > 15 else 0, "feedback": "Basic check: Add more content."}
+        except Exception as e:
+            print(f"Short answer grading error: {e}")
+            return {"score": 50 if len(user_answer) > 15 else 0, "feedback": "Basic check: Average effort; improve details."}
 
     def grade_essay(self, essay: str, rubric: str) -> Dict:
         prompt = f"""
 Grade this essay on a scale of 0-100 based on the rubric: {rubric}
 Essay: {essay}
 
-Output JSON: {{"score": int, "feedback": "Detailed strengths/weaknesses."}}
+**Instruction:** You are an expert essay grader for the **Kenyan curriculum (KCSE/KPSEA)**. Be fair, detailed, constructive, and ensure grading aligns with local expectations for structure, content, and language use.
+Output **only JSON**: {{"score": int, "feedback": "Detailed strengths/weaknesses."}}
 """
         try:
             response = self.generate_response(prompt, "You are an expert essay grader for Kenyan curriculum. Be fair, detailed, and constructive.")
@@ -265,7 +271,7 @@ Output JSON: {{"score": int, "feedback": "Detailed strengths/weaknesses."}}
             return result
         except Exception as e:
             print(f"Essay grading error: {e}")
-            return {"score": 50, "feedback": "Fallback: Average effort; improve details."}
+            return {"score": 50, "feedback": "Fallback: Average effort; improve details. (AI Grading Error)"}
 
     def summarize_text_hf(self, text: str) -> str:
         return "Summary not available (HF disabled)."

@@ -9,9 +9,10 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 
 class Database:
-    def __init__(self, db_path: str = "learnflow.db"):
+    def __init__(self, db_path: str = "prepke.db"): # Changed DB file name
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        # Ensures cross-platform compatibility for Streamlit concurrency
+        self.conn = sqlite3.connect(db_path, check_same_thread=False) 
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
 
@@ -165,7 +166,8 @@ class Database:
         secret_row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
         if not secret_row: return None
         secret = secret_row["secret"]
-        totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(name=user["email"], issuer_name="LearnFlow AI")
+        # 🇰🇪 Changed Issuer Name to PrepKe AI
+        totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(name=user["email"], issuer_name="PrepKe AI") 
         qr = qrcode.make(totp_uri)
         buffered = io.BytesIO()
         qr.save(buffered, format="PNG")
@@ -273,7 +275,8 @@ class Database:
             "UPDATE users SET streak = ?, last_streak_date = ? WHERE user_id = ?",
             (streak, today.isoformat(), user_id)
         )
-        self.add_xp(user_id, 20, spendable=False)  # Daily streak bonus
+        # Daily streak bonus XP
+        self.add_xp(user_id, 20, spendable=False) 
         self.conn.commit()
         return streak
 
@@ -314,6 +317,7 @@ class Database:
         """, (category,)).fetchall()
 
     def get_xp_leaderboard(self) -> List[Dict]:
+        # This query is correct and necessary for the XP leaderboard.
         return self.conn.execute("""
             SELECT email, total_xp,
                    (SELECT COUNT(*) + 1 FROM users u2 

@@ -1,3 +1,4 @@
+# utils.py
 import PyPDF2
 import io
 from typing import Optional, List
@@ -83,84 +84,7 @@ class Translator_Utils:
         except:
             return 'en'
 
-class EssayGrader:
-    @staticmethod
-    def grade_essay(essay_text: str, rubric: dict = None) -> dict:
-        if rubric is None:
-            rubric = {'grammar': 30, 'structure': 25, 'content': 25, 'vocabulary': 20}
-        
-        scores = {}
-        feedback = []
-        
-        sentences = nltk.sent_tokenize(essay_text)
-        words = nltk.word_tokenize(essay_text)
-        
-        word_count = len(words)
-        sentence_count = len(sentences)
-        avg_sentence_length = word_count / sentence_count if sentence_count > 0 else 0
-        
-        # Grammar score (simple)
-        grammar_score = min(100, max(0, 100 - (abs(avg_sentence_length - 20) * 2)))
-        scores['grammar'] = round(grammar_score * rubric['grammar'] / 100, 1)
-        
-        # Structure (paragraph count)
-        paragraph_count = len(re.split(r'\n\s*\n', essay_text))
-        structure_score = 50
-        if paragraph_count >= 3:
-            structure_score = 80
-        if paragraph_count >= 5:
-            structure_score = 100
-        scores['structure'] = round(structure_score * rubric['structure'] / 100, 1)
-        
-        if paragraph_count < 3:
-            feedback.append("Consider organizing your essay into introduction, body, and conclusion paragraphs.")
-        
-        # Content
-        if word_count < 100:
-            content_score = 60
-            feedback.append("Your essay is quite short. Try to expand on your ideas.")
-        elif word_count < 200:
-            content_score = 75
-        elif word_count < 300:
-            content_score = 85
-        else:
-            content_score = 95
-        scores['content'] = round(content_score * rubric['content'] / 100, 1)
-        
-        # Vocabulary
-        unique_words = len(set(word.lower() for word in words if word.isalnum()))
-        vocabulary_diversity = unique_words / word_count if word_count > 0 else 0
-        vocabulary_score = min(100, vocabulary_diversity * 150)
-        scores['vocabulary'] = round(vocabulary_score * rubric['vocabulary'] / 100, 1)
-        
-        if vocabulary_diversity < 0.5:
-            feedback.append("Try to use a more diverse vocabulary.")
-        
-        total_score = sum(scores.values())
-        
-        if total_score >= 90:
-            overall_feedback = "Excellent work!"
-        elif total_score >= 80:
-            overall_feedback = "Very good essay!"
-        elif total_score >= 70:
-            overall_feedback = "Good effort, with room for improvement."
-        elif total_score >= 60:
-            overall_feedback = "Fair work. Focus on the feedback to improve."
-        else:
-            overall_feedback = "Keep practicing! Review the feedback carefully."
-        
-        return {
-            'total_score': round(total_score, 1),
-            'breakdown': scores,
-            'feedback': feedback,
-            'overall': overall_feedback,
-            'stats': {
-                'word_count': word_count,
-                'sentence_count': sentence_count,
-                'paragraph_count': paragraph_count,
-                'avg_sentence_length': round(avg_sentence_length, 1)
-            }
-        }
+# Removed EssayGrader class to unify grading logic via AI_Engine.grade_essay
 
 class VoiceInputHelper:
     @staticmethod

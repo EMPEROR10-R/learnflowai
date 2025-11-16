@@ -73,7 +73,8 @@ def apply_theme():
     """, unsafe_allow_html=True)
 
 # ────────────────────────────── MUST BE FIRST ──────────────────────────────
-st.set_page_config(page_title="LearnFlow AI", page_icon="KE", layout="wide", initial_sidebar_state="expanded")
+# 🏆 App Name Change: PrepKe AI 🇰🇪
+st.set_page_config(page_title="PrepKe AI: Your Kenyan AI Tutor", page_icon="KE", layout="wide", initial_sidebar_state="expanded")
 
 # INIT
 try:
@@ -108,7 +109,7 @@ def enforce_access():
     tier = get_user_tier()
     tab = st.session_state.current_tab
     if tier == "admin": return
-    if tier == "basic" and tab not in ["Chat Tutor", "Progress", "Settings"]:
+    if tier == "basic" and tab not in ["Chat Tutor", "Progress", "Settings", "Premium"]:
         st.warning("Upgrade to **Premium** to access this feature.")
         st.stop()
     if tier == "basic":
@@ -120,9 +121,10 @@ def enforce_access():
             st.stop()
 
 # GAMIFICATION
-def get_user_level(user):
-    total_xp = user.get("total_xp", 0)
-    spendable_xp = user.get("spendable_xp", total_xp)
+@st.cache_data(ttl=600) # Cache level calculation for 10 minutes
+def get_user_level(user_data):
+    total_xp = user_data.get("total_xp", 0)
+    spendable_xp = user_data.get("spendable_xp", total_xp)
     tier = get_user_tier()
     max_level = float('inf') if tier != "basic" else BASIC_MAX_LEVEL
 
@@ -137,7 +139,7 @@ def get_user_level(user):
 
 def award_xp(user_id, points, reason):
     db.add_xp(user_id, points)
-    st.success(f"**+{points} XP** – {reason}")
+    st.toast(f"**+{points} XP** – {reason} 🎉")
 
 def buy_discount_cheque(user_id):
     user = db.get_user(user_id)
@@ -152,13 +154,13 @@ def buy_discount_cheque(user_id):
     db.add_xp(user_id, -CHEQUE_COST, spendable=True)
     db.increase_discount(user_id, 5)
     db.reset_spendable_progress(user_id)
-    st.success("**5% Discount Cheque Bought!** Premium now 5% off!")
+    st.success("**5% Discount Cheque Bought!** Premium now 5% off! 💰")
 
 # UI
 def welcome_screen():
     st.markdown("""
     <div style="background:linear-gradient(135deg,#009E60,#FFD700);padding:80px;border-radius:20px;text-align:center;color:white">
-        <h1>LearnFlow AI</h1>
+        <h1>PrepKe AI</h1>
         <p style="font-size:1.3rem">Your Kenyan AI Tutor • KCPE • KPSEA • KJSEA • KCSE</p>
         <p style="font-size:1.1rem">Earn XP • Level Up • Unlock Badges • Compete Nationally</p>
     </div>
@@ -216,7 +218,7 @@ def login_block():
             uid = db.create_user(email, pwd)
             if uid:
                 db.add_xp(uid, 50)
-                st.success("Account created! +50 XP")
+                st.success("Account created! +50 XP 🥳")
             else:
                 st.error("Email exists.")
             return
@@ -242,15 +244,23 @@ def login_block():
 def sidebar():
     with st.sidebar:
         apply_theme()
-        st.markdown("## LearnFlow AI")
+        st.markdown("## PrepKe AI 🇰🇪")
         tier = get_user_tier()
         st.markdown(f"**Tier:** `{tier.upper()}`")
 
-        user = st.session_state.user
+        user = db.get_user(st.session_state.user_id) # Refresh user data for accurate XP
+        st.session_state.user = user # Update session state
         level, current, next_xp, spendable = get_user_level(user)
         st.markdown(f"### Level {level} {'(Max)' if tier == 'basic' and level == BASIC_MAX_LEVEL else ''}")
-        st.markdown(f"<div class='xp-bar' style='width: {current/next_xp*100}%'></div>", unsafe_allow_html=True)
-        st.caption(f"**{current:,}/{next_xp:,} XP**")
+        
+        # Avoid division by zero if next_req is inf (max level)
+        if next_xp != float('inf'):
+            progress_percent = current/next_xp*100
+            st.markdown(f"<div class='xp-bar' style='width: {progress_percent}%'></div>", unsafe_allow_html=True)
+            st.caption(f"**{current:,}/{next_xp:,} XP** to next level")
+        else:
+            st.success(f"Max Level Reached! XP: {current:,}")
+
 
         st.markdown(f"**Spendable XP:** {spendable:,}")
         if spendable >= CHEQUE_COST and user.get("total_xp", 0) >= NEXT_CHEQUE_THRESHOLD:
@@ -258,20 +268,29 @@ def sidebar():
                 buy_discount_cheque(st.session_state.user_id)
 
         streak = db.update_streak(st.session_state.user_id)
-        st.markdown(f"**Streak:** {streak} days")
+        st.markdown(f"**Streak:** {streak} days 🔥")
 
         st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
 
         badges = json.loads(user.get("badges", "[]"))
         if badges:
-            st.markdown("### Badges")
+            st.markdown("### Badges 🥇")
             for b in badges[:6]:
                 st.markdown(f"<span class='badge'>{BADGES.get(b, b)}</span>", unsafe_allow_html=True)
 
-        st.markdown("### National Leaderboard")
+        st.markdown("### National Leaderboard 🌍")
+        # Optimization: Fetch leaderboard and ensure level calculation is available
         lb = db.get_xp_leaderboard()[:5]
+        
         for i, e in enumerate(lb):
-            st.markdown(f"**{i+1}.** {e['email']} – L{e['level']} ({e['total_xp']:,} XP)")
+            # The SQL query already handles level, but we need to derive it cleanly here since the query is complex.
+            # For simplicity, we'll use the XP value and assume 'level' is derived on the DB side (which it is not 
+            # in the provided DB file, so we fix the assumption here by using simple XP display)
+            # Revert to simple XP display for robust cross-OS SQL compatibility
+            
+            # Note: The original DB query returns total_xp, not level. The display is corrected below.
+            st.markdown(f"**{i+1}.** {e['email']} ({e['total_xp']:,} XP)")
+
 
 # SETTINGS TAB
 def settings_tab():
@@ -292,7 +311,7 @@ def settings_tab():
             st.code(secret)
             award_xp(st.session_state.user_id, 20, "2FA Enabled")
     else:
-        st.success("2FA Enabled")
+        st.success("2FA Enabled ✅")
         if st.button("Disable 2FA"):
             db.disable_2fa(st.session_state.user_id)
             st.success("2FA Disabled")
@@ -303,8 +322,14 @@ def settings_tab():
         db.update_profile(st.session_state.user_id, name)
         award_xp(st.session_state.user_id, 30, "Profile completed")
 
-# MAIN TABS (rest unchanged, just beautified)
-# ... [chat_tab, pdf_tab, exam_tab, etc. – same logic, just st.success with emojis]
+# Dummy Tabs (Must exist for sidebar to work)
+def chat_tab(): st.info("Chat Tutor content goes here...")
+def progress_tab(): st.info("Progress dashboard content goes here...")
+def pdf_tab(): st.info("PDF Q&A content goes here...")
+def exam_tab(): st.info("Exam Prep content goes here...")
+def essay_tab(): st.info("Essay Grader content goes here...")
+def premium_tab(): st.info("Premium Upgrade content goes here...")
+def admin_dashboard(): st.info("Admin Dashboard content goes here...")
 
 # MAIN
 def main():
@@ -313,7 +338,7 @@ def main():
         apply_theme()
         if st.session_state.show_welcome: welcome_screen(); return
         login_block()
-        if not st.session_state.logged_in: st.info("Log in."); return
+        if not st.session_state.logged_in: st.info("Log in to start learning! 📖"); return
         sidebar()
         enforce_access()
 
@@ -333,6 +358,8 @@ def main():
         }
         for name, obj in zip(tabs, tab_objs):
             with obj:
+                # Use st.session_state to track the current tab for access enforcement
+                st.session_state.current_tab = name
                 tab_map[name]()
     except Exception as e:
         st.error(f"CRASH: {e}")
