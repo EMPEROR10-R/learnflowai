@@ -127,10 +127,6 @@ class Database:
         self.conn.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,))
         self.conn.commit()
 
-    def unban_user(self, user_id: int):
-        self.conn.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
     def upgrade_to_premium(self, user_id: int):
         expiry = (date.today() + timedelta(days=30)).isoformat()
         self.conn.execute(
@@ -159,15 +155,17 @@ class Database:
     def enable_2fa(self, user_id: int):
         secret = pyotp.random_base32()
         self.conn.execute(
-            # FIX: Using INSERT OR REPLACE to handle the case where a secret might exist but 2FA was disabled
-            "INSERT OR REPLACE INTO user_2fa (user_id, secret, enabled) VALUES (?, ?, 1)",
+            "INSERT OR REPLACE INTO user_2fa (user_id, secret) VALUES (?, ?)",
             (user_id, secret)
         )
         self.conn.commit()
-        return secret, self.get_2fa_qr_bytes(user_id, secret) # Return QR code bytes
+        return secret, self.get_2fa_qr(user_id)
 
-    def get_2fa_qr_bytes(self, user_id: int, secret: str):
+    def get_2fa_qr(self, user_id: int):
         user = self.get_user(user_id)
+        secret_row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
+        if not secret_row: return None
+        secret = secret_row["secret"]
         # 🇰🇪 Changed Issuer Name to PrepKe AI
         totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(name=user["email"], issuer_name="PrepKe AI") 
         qr = qrcode.make(totp_uri)
@@ -265,22 +263,20 @@ class Database:
     def update_streak(self, user_id: int) -> int:
         user = self.get_user(user_id)
         today = date.today()
-        # Ensure last_streak_date is not NULL before trying to parse
         last_date = date.fromisoformat(user["last_streak_date"]) if user["last_streak_date"] else None
         streak = user["streak"]
 
         if last_date == today - timedelta(days=1):
             streak += 1
         elif last_date != today:
-            streak = 1 # Reset if not consecutive and not today
+            streak = 1
 
         self.conn.execute(
             "UPDATE users SET streak = ?, last_streak_date = ? WHERE user_id = ?",
             (streak, today.isoformat(), user_id)
         )
-        # Daily streak bonus XP - Only award if streak was maintained/reset today
-        if last_date != today:
-             self.add_xp(user_id, 20, spendable=False) 
+        # Daily streak bonus XP
+        self.add_xp(user_id, 20, spendable=False) 
         self.conn.commit()
         return streak
 
@@ -321,21 +317,25 @@ class Database:
         """, (category,)).fetchall()
 
     def get_xp_leaderboard(self) -> List[Dict]:
-        # This query is correct and necessary for the XP leaderboard.
-        return self.conn.execute("""
-            SELECT email, total_xp,
+        # FIX 5.1: Added 'name' and 'user_id' to the SELECT clause for sidebar display
+        rows = self.conn.execute("""
+            SELECT user_id, email, name, total_xp,
                    (SELECT COUNT(*) + 1 FROM users u2 
                     WHERE u2.total_xp > u1.total_xp AND u2.is_banned = 0) as rank
             FROM users u1
             WHERE is_banned = 0
             ORDER BY total_xp DESC LIMIT 10
         """).fetchall()
+        return [dict(row) for row in rows]
 
     # ==============================================================================
     # CHAT & PDF
     # ==============================================================================
     def add_chat_history(self, user_id: int, subject: str, query: str, response: str):
-        self.increment_daily_question(user_id)
+        # Only increment question count if it's not a PDF query (PDF has its own counter)
+        if subject != "PDF Q&A": 
+            self.increment_daily_question(user_id)
+            
         self.conn.execute(
             "INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?, ?, ?, ?)",
             (user_id, subject, query, response)
