@@ -418,7 +418,7 @@ def main():
         if not st.session_state.logged_in: st.info("Log in."); return
         sidebar()
         enforce_access()
-        tabs = ["Chat Tutor", drying "Progress", "Settings"]
+        tabs = ["Chat Tutor", "Progress", "Settings"]  # FIXED: Removed 'drying' typo
         if get_user_tier() in ["premium", "admin"]:
             tabs += ["PDF Q&A", "Exam Prep", "Essay Grader"]
         if get_user_tier() == "basic":
