@@ -9,10 +9,12 @@ from typing import Optional, Dict, List
 
 DB_PATH = "users.db"
 
+
 def get_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def ensure_schema():
     conn = get_conn()
@@ -41,9 +43,7 @@ def ensure_schema():
         font TEXT DEFAULT 'sans-serif',
         discount REAL DEFAULT 0.0,
         daily_questions INTEGER DEFAULT 0,
-        last_question_date TEXT,
-        daily_pdf_uploads INTEGER DEFAULT 0,
-        last_pdf_date TEXT
+        last_question_date TEXT
     )
     ''')
 
@@ -71,18 +71,6 @@ def ensure_schema():
     ]:
         c.execute(sql)
 
-    # ADD MISSING COLUMNS (safe: ignore if exists)
-    for col in [
-        ("daily_questions", "INTEGER DEFAULT 0"),
-        ("last_question_date", "TEXT"),
-        ("daily_pdf_uploads", "INTEGER DEFAULT 0"),
-        ("last_pdf_date", "TEXT")
-    ]:
-        try:
-            c.execute(f"ALTER TABLE users ADD COLUMN {col[0]} {col[1]}")
-        except sqlite3.OperationalError:
-            pass  # Already exists
-
     # FORCE ONLY ONE ADMIN
     admin_email = "kingmumo15@gmail.com"
     admin_pwd = "@Yoounruly10"
@@ -100,7 +88,9 @@ def ensure_schema():
     conn.commit()
     conn.close()
 
+
 ensure_schema()
+
 
 class Database:
     def __init__(self):
@@ -178,13 +168,8 @@ class Database:
         approval = datetime.fromisoformat(row["submitted_at"].split()[0])
         return datetime.now() < approval + timedelta(days=30)
 
-    def is_admin(self, user_id):
-        user = self.get_user(user_id)
-        return user and user["role"] == "admin"
-
-    # LIMITS
     def can_ask_question(self, user_id):
-        if self.is_admin(user_id) or (self.check_premium(user_id) and self.check_premium_validity(user_id)):
+        if self.check_premium(user_id) or self.get_user(user_id)["role"] == "admin":
             return True
         today = date.today().isoformat()
         c = self._c()
@@ -199,21 +184,9 @@ class Database:
         self.commit()
         return count <= 10
 
-    def can_upload_pdf(self, user_id):
-        if self.is_admin(user_id) or (self.check_premium(user_id) and self.check_premium_validity(user_id)):
-            return True
-        today = date.today().isoformat()
-        c = self._c()
-        c.execute("SELECT daily_pdf_uploads, last_pdf_date FROM users WHERE user_id = ?", (user_id,))
-        row = c.fetchone()
-        if not row: return False
-        count, last = row["daily_pdf_uploads"], row["last_pdf_date"]
-        if last != today:
-            count = 0
-        count += 1
-        c.execute("UPDATE users SET daily_pdf_uploads = ?, last_pdf_date = ? WHERE user_id = ?", (count, today, user_id))
-        self.commit()
-        return count <= 3
+    def is_admin(self, user_id):
+        user = self.get_user(user_id)
+        return user and user["role"] == "admin"
 
     # PAYMENTS
     def add_manual_payment(self, user_id, phone, code):
@@ -251,7 +224,7 @@ class Database:
             c.execute("UPDATE users SET badges = ? WHERE user_id = ?", (json.dumps(badges), user_id))
             self.commit()
 
-    # LEADERBOARD
+    # LEADERBOARD + DISCOUNT
     def get_leaderboard(self, category):
         c = self._c()
         c.execute("""
