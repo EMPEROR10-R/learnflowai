@@ -87,7 +87,8 @@ st.set_page_config(page_title="PrepKe AI: Your Kenyan AI Tutor", page_icon="KE",
 # INIT
 try:
     db = Database()
-    ai_engine = AIEngine(st.secrets.get("GEMINI_API_KEY", ""))
+    # Assuming AIEngine is available and correctly initialized
+    ai_engine = AIEngine(st.secrets.get("GEMINI_API_KEY", "")) 
 except Exception as e:
     st.error(f"INIT FAILED: {e}")
     st.stop()
@@ -179,7 +180,6 @@ def buy_discount_cheque(user_id):
         st.error("Not enough spendable XP!")
         return
         
-    # Using the correct db function from the final solution
     if db.deduct_spendable_xp(user_id, CHEQUE_COST):
         db.add_discount(user_id, 5) 
         st.success("**5% Discount Cheque Bought!** Premium now 5% off! 💰")
@@ -206,6 +206,7 @@ def login_block():
     st.markdown("### Login / Sign Up")
     choice = st.radio("Action", ["Login", "Sign Up", "Forgot Password"], horizontal=True, label_visibility="collapsed")
     
+    # ... (Forgot Password logic is kept as per previous turn) ...
     if choice == "Forgot Password":
         email = st.text_input("Email")
         if st.button("Send Reset Code"):
@@ -244,8 +245,7 @@ def login_block():
     if st.button(choice, type="primary"):
         if choice == "Sign Up":
             if len(pwd) < 6: st.error("Password ≥6 chars."); return
-            # Using the correct db function from the final solution
-            uid = db.add_user(email, pwd)
+            uid = db.create_user(email, pwd)
             if uid:
                 db.add_xp(uid, 50)
                 st.success("Account created! +50 XP 🥳")
@@ -253,8 +253,7 @@ def login_block():
                 st.error("Email exists or database error.")
             return
 
-        # --- ADMIN AUTO-PROMOTION LOGIC ---
-        # Checks if the user is attempting to use the hardcoded admin credentials
+        # --- ADMIN AUTO-PROMOTION LOGIC (FIXED) ---
         if email == DEFAULT_ADMIN_EMAIL and pwd == DEFAULT_ADMIN_PASSWORD:
             admin_id = db.ensure_admin_is_set(email, pwd)
             if admin_id:
@@ -272,7 +271,6 @@ def login_block():
 
         stored_hash = user["password_hash"]
         if isinstance(stored_hash, str): stored_hash = stored_hash.encode()
-        # Must check the password against the HASHED password, not the cleartext default password
         if not bcrypt.checkpw(pwd.encode('utf-8'), stored_hash): st.error("Invalid email/password."); return
 
         if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
@@ -316,9 +314,11 @@ def sidebar():
         streak = db.update_streak(st.session_state.user_id)
         st.markdown(f"**Streak:** {streak} days 🔥")
 
-        st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
+        # Assuming SUBJECT_PROMPTS is correctly imported
+        st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys())) 
 
         badges = json.loads(user.get("badges", "[]"))
+        # Assuming BADGES is correctly imported
         if badges:
             st.markdown("### Badges 🥇")
             for b in badges[:6]:
@@ -352,9 +352,8 @@ def settings_tab():
     st.markdown("### 2FA")
     if not db.is_2fa_enabled(st.session_state.user_id):
         if st.button("Enable 2FA"):
-            # The actual db.enable_2fa should return a QR image and secret
             secret, qr = db.enable_2fa(st.session_state.user_id) 
-            st.image("https://i.imgur.com/8Q9Z42S.png", caption="Scan with Authenticator (Placeholder)") # Using a placeholder image for security/simplicity
+            st.image("https://i.imgur.com/8Q9Z42S.png", caption="Scan with Authenticator (Placeholder)", use_column_width=True) 
             st.code(secret)
             award_xp(st.session_state.user_id, 20, "2FA Enabled")
     else:
@@ -380,8 +379,7 @@ def premium_tab(): st.session_state.current_tab = "Premium"; st.info("Premium Up
 # ADMIN DASHBOARD - The payment approval and discount tool
 def admin_dashboard():
     st.session_state.current_tab = "Admin"
-    st.title("👑 Admin Dashboard (Locked)")
-    st.warning("This tab is strictly for the Administrator account only. **The Admin Role Management tool is disabled to ensure a single, permanent administrator.**")
+    st.title("👑 Admin Dashboard")
     st.divider()
     
     # 1. Pending Payments (Approving these makes the user Premium)
@@ -391,7 +389,7 @@ def admin_dashboard():
     
     if pending_payments:
         for payment in pending_payments:
-            # FIX: Ensure user email is used for label
+            # FIX: user email is now correctly returned via the JOIN in database.py
             user_label = payment.get('email') or f"User {payment.get('user_id', 'Unknown')}"
 
             with st.expander(f"**{user_label}** - Code: {payment.get('mpesa_code', 'N/A')}"):
@@ -400,7 +398,7 @@ def admin_dashboard():
                 with col_a:
                     if st.button("✅ Approve", key=f"approve_{payment['id']}"):
                         db.approve_manual_payment(payment['id']) 
-                        st.success(f"Approved Premium for {user_label}.")
+                        st.success(f"Approved Premium for {user_label} and updated status.")
                         st.rerun()
                 with col_r:
                     if st.button("❌ Reject", key=f"reject_{payment['id']}"):
@@ -434,7 +432,7 @@ def admin_dashboard():
     
     st.divider()
     st.markdown("### ⚠️ Security Notice")
-    st.error("The administrative function to change user roles has been removed from the UI to ensure the admin account is held permanently and exclusively by the designated user.")
+    st.info("The administrative function to change user roles is intentionally restricted to code modification to ensure the admin account is held permanently and exclusively by the designated user.")
 
 
 # MAIN
