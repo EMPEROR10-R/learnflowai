@@ -4,10 +4,18 @@ import bcrypt
 import json
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from database import Database
 from ai_engine import AIEngine
-from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES, LEVELS
+from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
+
+# ==============================================================================
+# GAMIFICATION: LEVELS (DEFINED HERE – NOT IN PROMPTS.PY)
+# ==============================================================================
+LEVELS = {
+    1: 0, 2: 100, 3: 250, 4: 500, 5: 1000,
+    6: 2000, 7: 3500, 8: 6000, 9: 10000, 10: 15000
+}
 
 # ────────────────────────────── MUST BE FIRST ──────────────────────────────
 st.set_page_config(
@@ -17,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# HIDE EVERYTHING: Git, Streamlit Crown, Fork, 3 dots, Rerun, Settings, Print, About
+# HIDE ALL STREAMLIT & GIT ICONS
 hide_streamlit_style = """
 <style>
     #MainMenu {visibility: hidden;}
@@ -25,7 +33,6 @@ hide_streamlit_style = """
     header {visibility: hidden;}
     .css-1d391kg, .css-1v0mbdj, .css-1y0t9e2, .css-1q8ddts, .css-1v3fvcr, .css-1x8cf1d {display: none;}
     .css-18e3th9 {padding-top: 0rem; padding-left: 1rem; padding-right: 1rem;}
-    .css-1d391kg a, .css-1v0mbdj a, .css-1y0t9e2 a {display: none;}
     .css-1v3fvcr a[href*="streamlit"], 
     .css-1d391kg a[href*="github"], 
     .css-1v0mbdj a[href*="github"],
@@ -42,7 +49,7 @@ except Exception as e:
     st.error(f"INIT FAILED: {e}")
     st.stop()
 
-# SESSION
+# SESSION STATE
 def init_session():
     defaults = {
         "logged_in": False, "user_id": None, "is_admin": False, "user": None,
@@ -55,7 +62,7 @@ def init_session():
         if k not in st.session_state:
             st.session_state[k] = v
 
-# TIER
+# USER TIER
 def get_user_tier():
     if st.session_state.is_admin: return "admin"
     user = db.get_user(st.session_state.user_id)
@@ -68,7 +75,7 @@ def enforce_access():
     tier = get_user_tier()
     tab = st.session_state.current_tab
     if tier == "admin": return
-    if tier == "basic" and tab not in ["Chat Tutor", "Settings", "Progress"]:
+    if tier == "basic" and tab not in ["Chat Tutor", "Progress", "Settings"]:
         st.warning("Upgrade to **Premium** to access this feature.")
         st.stop()
     if tier == "basic":
@@ -89,7 +96,7 @@ def get_user_level(user):
 
 def award_xp(user_id, points, reason):
     db.add_xp(user_id, points)
-    st.success(f"**+{points} XP** – {reason}")
+    st.success(f"+{points} XP – {reason}")
 
 # UI
 def welcome_screen():
@@ -97,7 +104,7 @@ def welcome_screen():
     <div style="background:linear-gradient(135deg,#009E60,#FFD700);padding:60px;border-radius:20px;text-align:center;color:white">
         <h1>LearnFlow AI</h1>
         <p style="font-size:1.2rem">Your Kenyan AI Tutor</p>
-        <p style="font-size:1.1rem">KCPE • KPSEA • KJSEA • KCSE • Python Programming</p>
+        <p style="font-size:1.1rem">KCPE • KPSEA • KJSEA • KCSE • Python</p>
         <p style="font-size:1rem">Earn XP • Level Up • Unlock Badges</p>
     </div>
     """, unsafe_allow_html=True)
@@ -120,7 +127,6 @@ def login_block():
             if user and db.is_2fa_enabled(user["user_id"]):
                 otp = db.generate_otp(user["user_id"])
                 st.session_state.reset_user_id = user["user_id"]
-                st.session_state.reset_otp = otp
                 st.session_state.reset_step = 1
                 st.success("2FA code sent to your authenticator!")
             else:
@@ -156,7 +162,7 @@ def login_block():
                 return
             uid = db.create_user(email, pwd)
             if uid:
-                db.add_xp(uid, 50, "Signed up!")
+                db.add_xp(uid, 50)
                 st.success("Account created! +50 XP")
             else:
                 st.error("Email already exists.")
@@ -197,7 +203,7 @@ def sidebar():
 
         user = st.session_state.user
         level, current_xp, next_xp = get_user_level(user)
-        st.markdown(f"### Level {level} {LEVELS.get(level, '')}")
+        st.markdown(f"### Level {level}")
         st.progress(current_xp / next_xp if next_xp else 1)
         st.caption(f"{current_xp}/{next_xp} XP")
 
@@ -290,13 +296,13 @@ def exam_tab():
                 res = ai_engine.grade_mcq(st.session_state.exam_questions, st.session_state.user_answers)
                 score = res["percentage"]
                 db.add_score(st.session_state.user_id, "exam", score)
-                if score >= 90: db.add_badge(st.session_state.user_id, "exam_master")
+                if score >= 90: db.add_badge(st.session_state.user_id, "perfect_score")
                 st.markdown(f"## Score: {score}%")
                 for r in res["results"]:
                     icon = "Correct" if r["is_correct"] else "Wrong"
                     st.markdown(f"- {icon} **{r['question']}**  \n  Your: `{r['user_answer']}`  \n  Correct: `{r['correct_answer']}`")
                 xp = int(score / 10)
-                award_xp(st.session_state.user_id, xp, f"Exam score {score}%")
+                award_xp(st.session_state.user_id, xp, f"Exam {score}%")
                 st.session_state.exam_submitted = True
                 st.rerun()
         with col2:
@@ -312,7 +318,7 @@ def essay_tab():
         res = ai_engine.grade_essay(essay, "Kenyan curriculum")
         score = res["score"]
         db.add_score(st.session_state.user_id, "essay", score)
-        if score >= 90: db.add_badge(st.session_state.user_id, "essay_expert")
+        if score >= 90: db.add_badge(st.session_state.user_id, "perfect_score")
         st.markdown(f"**Score: {score}/100** – {res['feedback']}")
         award_xp(st.session_state.user_id, int(score / 5), f"Essay {score}/100")
 
@@ -322,7 +328,7 @@ def progress_tab():
 
     user = st.session_state.user
     level, current_xp, next_xp = get_user_level(user)
-    st.markdown(f"### Level {level} {LEVELS.get(level, '')}")
+    st.markdown(f"### Level {level}")
     st.progress(current_xp / next_xp if next_xp else 1)
     st.caption(f"**{current_xp}/{next_xp} XP** to next level")
 
@@ -343,7 +349,7 @@ def settings_tab():
     st.session_state.current_tab = "Settings"
     st.markdown("### Settings")
     st.selectbox("Theme", ["Light", "Dark"], key="theme")
-    st.selectbox("Font", ["Sans-serif", "Serif", "Monospace", "Arial", "Courier New"], key="font")
+    st.selectbox("Font", ["Sans-serif", "Serif", "Monospace"], key="font")
 
     st.markdown("### 2FA (Authenticator)")
     if not db.is_2fa_enabled(st.session_state.user_id):
@@ -395,6 +401,13 @@ def admin_dashboard():
         with c1: st.button(f"Ban {row['email']}", key=f"ban_{row['user_id']}", on_click=db.ban_user, args=(row['user_id'],))
         with c2: st.button(f"Upgrade {row['email']}", key=f"up_{row['user_id']}", on_click=db.upgrade_to_premium, args=(row['user_id'],))
         with c3: st.button(f"Downgrade {row['email']}", key=f"down_{row['user_id']}", on_click=db.downgrade_to_basic, args=(row['user_id'],))
+    st.markdown("### Payments")
+    for p in db.get_pending_payments():
+        c1, c2, c3, c4 = st.columns([2,2,1,1])
+        with c1: st.write(p['phone'])
+        with c2: st.write(p['mpesa_code'])
+        with c3: st.button("Approve", key=f"a{p['id']}", on_click=db.approve_manual_payment, args=(p['id'],))
+        with c4: st.button("Reject", key=f"r{p['id']}", on_click=db.reject_manual_payment, args=(p['id'],))
 
 # MAIN
 def main():
@@ -405,7 +418,7 @@ def main():
         if not st.session_state.logged_in: st.info("Log in."); return
         sidebar()
         enforce_access()
-        tabs = ["Chat Tutor", "Progress", "Settings"]
+        tabs = ["Chat Tutor", drying "Progress", "Settings"]
         if get_user_tier() in ["premium", "admin"]:
             tabs += ["PDF Q&A", "Exam Prep", "Essay Grader"]
         if get_user_tier() == "basic":
