@@ -45,306 +45,148 @@ class Database:
         CREATE TABLE IF NOT EXISTS user_2fa (
             user_id INTEGER PRIMARY KEY,
             secret TEXT NOT NULL,
-            enabled INTEGER DEFAULT 1,
-            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            is_enabled INTEGER DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
         );
 
-        -- Chat History
+        -- Chat History Table
         CREATE TABLE IF NOT EXISTS chat_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            subject TEXT,
-            user_query TEXT,
-            ai_response TEXT,
+            user_id INTEGER NOT NULL,
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            subject TEXT NOT NULL,
+            user_message TEXT NOT NULL,
+            ai_response TEXT NOT NULL,
+            xp_earned INTEGER DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
         );
 
-        -- Scores
-        CREATE TABLE IF NOT EXISTS scores (
+        -- Exam Results Table
+        CREATE TABLE IF NOT EXISTS exam_results (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            category TEXT,  -- chat, exam, essay
-            score REAL,
+            user_id INTEGER NOT NULL,
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            exam_type TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            details TEXT, -- JSON structure for questions/answers
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
         );
 
-        -- Manual Payments
+        -- Essay Results Table
+        CREATE TABLE IF NOT EXISTS essay_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+            topic TEXT,
+            score INTEGER NOT NULL,
+            feedback TEXT NOT NULL,
+            essay_text TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        );
+        
+        -- User Achievements Table
+        CREATE TABLE IF NOT EXISTS user_achievements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            badge_key TEXT NOT NULL,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        );
+
+        -- Payments Table
         CREATE TABLE IF NOT EXISTS payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            phone TEXT,
-            mpesa_code TEXT,
-            status TEXT DEFAULT 'pending',  -- pending, approved, rejected
+            user_id INTEGER NOT NULL,
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            phone TEXT NOT NULL,
+            mpesa_code TEXT NOT NULL,
+            amount REAL DEFAULT 500.0,
+            status TEXT DEFAULT 'pending', -- pending, approved, rejected
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
         );
         """)
-        self.conn.commit()
 
     # ==============================================================================
-    # USER MANAGEMENT
+    # USER AUTHENTICATION & RETRIEVAL (CRASH FIX RELATED)
     # ==============================================================================
-    def create_user(self, email: str, password: str) -> Optional[int]:
-        try:
-            hash_pwd = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-            cursor = self.conn.execute(
-                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
-                (email.lower(), hash_pwd)
-            )
-            self.conn.commit()
-            return cursor.lastrowid
-        except sqlite3.IntegrityError:
-            return None
+    
+    def get_user_by_email(self, email: str) -> Optional[Dict]:
+        """
+        Retrieves a user by email, returns dict or None.
+        Returns None if no user is found, preventing the 'get' error.
+        """
+        row = self.conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        return dict(row) if row else None 
 
-    def get_user(self, user_id: int) -> Optional[Dict]:
+    def get_user_data(self, user_id: int) -> Optional[Dict]:
+        """
+        Retrieves a user by ID, returns dict or None.
+        Returns None if no user is found, preventing the 'get' error.
+        """
         row = self.conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         return dict(row) if row else None
-
-    def get_user_by_email(self, email: str) -> Optional[Dict]:
-        row = self.conn.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone()
-        return dict(row) if row else None
-
-    def get_all_users(self) -> List[Dict]:
-        rows = self.conn.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
-        return [dict(row) for row in rows]
-
-    def update_password(self, user_id: int, new_password: str):
-        hash_pwd = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
-        self.conn.execute("UPDATE users SET password_hash = ? WHERE user_id = ?", (hash_pwd, user_id))
-        self.conn.commit()
-
-    def update_user_activity(self, user_id: int):
-        today = date.today().isoformat()
+        
+    def add_user(self, email: str, password: str, name: str = None) -> int:
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         self.conn.execute(
-            "UPDATE users SET last_active = ?, last_daily_reset = COALESCE(last_daily_reset, ?) WHERE user_id = ?",
-            (today, today, user_id)
+            "INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+            (email, hashed, name)
         )
         self.conn.commit()
-
-    def ban_user(self, user_id: int):
-        self.conn.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,))
-        self.conn.commit()
+        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def upgrade_to_premium(self, user_id: int):
-        expiry = (date.today() + timedelta(days=30)).isoformat()
+        expiry_date = (datetime.now() + timedelta(days=30)).isoformat()
         self.conn.execute(
             "UPDATE users SET is_premium = 1, premium_expiry = ? WHERE user_id = ?",
-            (expiry, user_id)
+            (expiry_date, user_id)
         )
         self.conn.commit()
 
-    def downgrade_to_basic(self, user_id: int):
-        self.conn.execute("UPDATE users SET is_premium = 0, premium_expiry = NULL WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
-    def check_premium_validity(self, user_id: int) -> bool:
-        user = self.get_user(user_id)
-        if not user or not user["is_premium"]: return False
-        expiry = user["premium_expiry"]
-        return expiry and date.fromisoformat(expiry) >= date.today()
-
-    def update_profile(self, user_id: int, name: str):
-        self.conn.execute("UPDATE users SET name = ? WHERE user_id = ?", (name, user_id))
-        self.conn.commit()
-
-    # ==============================================================================
-    # 2FA
-    # ==============================================================================
-    def enable_2fa(self, user_id: int):
-        secret = pyotp.random_base32()
+    def update_last_active(self, user_id: int):
         self.conn.execute(
-            "INSERT OR REPLACE INTO user_2fa (user_id, secret) VALUES (?, ?)",
-            (user_id, secret)
+            "UPDATE users SET last_active = ? WHERE user_id = ?",
+            (datetime.now().isoformat(), user_id)
         )
         self.conn.commit()
-        return secret, self.get_2fa_qr(user_id)
-
-    def get_2fa_qr(self, user_id: int):
-        user = self.get_user(user_id)
-        secret_row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
-        if not secret_row: return None
-        secret = secret_row["secret"]
-        # 🇰🇪 Changed Issuer Name to PrepKe AI
-        totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(name=user["email"], issuer_name="PrepKe AI") 
-        qr = qrcode.make(totp_uri)
-        buffered = io.BytesIO()
-        qr.save(buffered, format="PNG")
-        return buffered.getvalue()
-
-    def is_2fa_enabled(self, user_id: int) -> bool:
-        row = self.conn.execute("SELECT 1 FROM user_2fa WHERE user_id = ? AND enabled = 1", (user_id,)).fetchone()
-        return bool(row)
-
-    def verify_2fa_code(self, user_id: int, code: str) -> bool:
-        row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
-        if not row: return False
-        totp = pyotp.TOTP(row["secret"])
-        return totp.verify(code)
-
-    def disable_2fa(self, user_id: int):
-        self.conn.execute("DELETE FROM user_2fa WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
-    def generate_otp(self, user_id: int) -> str:
-        row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
-        if not row: return ""
-        return pyotp.TOTP(row["secret"]).now()
-
+        
     # ==============================================================================
-    # DAILY LIMITS
+    # XP AND BADGES
     # ==============================================================================
-    def _reset_daily_if_needed(self, user_id: int):
-        user = self.get_user(user_id)
-        last_reset = user["last_daily_reset"] or "1970-01-01"
-        if date.fromisoformat(last_reset) < date.today():
-            self.conn.execute(
-                "UPDATE users SET daily_questions = 0, daily_pdfs = 0, last_daily_reset = ? WHERE user_id = ?",
-                (date.today().isoformat(), user_id)
-            )
-            self.conn.commit()
-
-    def get_daily_question_count(self, user_id: int) -> int:
-        self._reset_daily_if_needed(user_id)
-        row = self.conn.execute("SELECT daily_questions FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        return row["daily_questions"] if row else 0
-
-    def get_daily_pdf_count(self, user_id: int) -> int:
-        self._reset_daily_if_needed(user_id)
-        row = self.conn.execute("SELECT daily_pdfs FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        return row["daily_pdfs"] if row else 0
-
-    def increment_daily_question(self, user_id: int):
-        self._reset_daily_if_needed(user_id)
-        self.conn.execute("UPDATE users SET daily_questions = daily_questions + 1 WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
-    def increment_daily_pdf(self, user_id: int):
-        self._reset_daily_if_needed(user_id)
-        self.conn.execute("UPDATE users SET daily_pdfs = daily_pdfs + 1 WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
-    # ==============================================================================
-    # XP & GAMIFICATION
-    # ==============================================================================
-    def add_xp(self, user_id: int, points: int, spendable: bool = False):
-        if spendable:
-            self.conn.execute(
-                "UPDATE users SET spendable_xp = spendable_xp + ? WHERE user_id = ?",
-                (points, user_id)
-            )
-        else:
-            self.conn.execute(
-                "UPDATE users SET total_xp = total_xp + ?, spendable_xp = spendable_xp + ? WHERE user_id = ?",
-                (points, points, user_id)
-            )
-        self.conn.commit()
-
-    def increase_discount(self, user_id: int, percent: int):
+    
+    def update_user_xp(self, user_id: int, xp_change: int):
         self.conn.execute(
-            "UPDATE users SET discount = LEAST(discount + ?, 50) WHERE user_id = ?",
-            (percent, user_id)
+            "UPDATE users SET total_xp = total_xp + ?, spendable_xp = spendable_xp + ? WHERE user_id = ?",
+            (xp_change, xp_change, user_id)
         )
         self.conn.commit()
 
-    def reset_spendable_progress(self, user_id: int):
-        self.conn.execute("UPDATE users SET spendable_xp = 0 WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
-    def add_badge(self, user_id: int, badge_key: str):
-        user = self.get_user(user_id)
-        badges = json.loads(user["badges"])
-        if badge_key not in badges:
-            badges.append(badge_key)
-            self.conn.execute("UPDATE users SET badges = ? WHERE user_id = ?", (json.dumps(badges), user_id))
-            self.conn.commit()
-
-    def update_streak(self, user_id: int) -> int:
-        user = self.get_user(user_id)
-        today = date.today()
-        last_date = date.fromisoformat(user["last_streak_date"]) if user["last_streak_date"] else None
-        streak = user["streak"]
-
-        if last_date == today - timedelta(days=1):
-            streak += 1
-        elif last_date != today:
-            streak = 1
-
-        self.conn.execute(
-            "UPDATE users SET streak = ?, last_streak_date = ? WHERE user_id = ?",
-            (streak, today.isoformat(), user_id)
-        )
-        # Daily streak bonus XP
-        self.add_xp(user_id, 20, spendable=False) 
-        self.conn.commit()
-        return streak
-
-    # ==============================================================================
-    # SCORES & LEADERBOARDS
-    # ==============================================================================
-    def add_score(self, user_id: int, category: str, score: float):
-        self.conn.execute(
-            "INSERT INTO scores (user_id, category, score) VALUES (?, ?, ?)",
-            (user_id, category, score)
-        )
-        self.conn.commit()
-
-    def get_user_scores(self, user_id: int) -> List[Dict]:
+    def get_user_achievements(self, user_id: int) -> List[Dict]:
         rows = self.conn.execute(
-            "SELECT category, score, timestamp FROM scores WHERE user_id = ? ORDER BY timestamp DESC LIMIT 50",
+            "SELECT * FROM user_achievements WHERE user_id = ? ORDER BY timestamp DESC LIMIT 20",
             (user_id,)
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_subject_performance(self, user_id: int) -> List[Dict]:
-        rows = self.conn.execute("""
-            SELECT subject, AVG(score) as avg_score
-            FROM chat_history ch
-            JOIN scores s ON ch.user_id = s.user_id AND DATE(ch.timestamp) = DATE(s.timestamp)
-            WHERE ch.user_id = ? AND s.category = 'exam'
-            GROUP BY subject
-        """, (user_id,)).fetchall()
-        return [dict(row) for row in rows]
-
-    def get_leaderboard(self, category: str) -> List[Dict]:
-        return self.conn.execute(f"""
-            SELECT u.email, s.score
-            FROM scores s
-            JOIN users u ON s.user_id = u.user_id
-            WHERE s.category = ? AND u.is_banned = 0
-            ORDER BY s.score DESC LIMIT 10
-        """, (category,)).fetchall()
-
-    def get_xp_leaderboard(self) -> List[Dict]:
-        # This query is correct and necessary for the XP leaderboard.
-        return self.conn.execute("""
-            SELECT email, total_xp,
-                   (SELECT COUNT(*) + 1 FROM users u2 
-                    WHERE u2.total_xp > u1.total_xp AND u2.is_banned = 0) as rank
-            FROM users u1
-            WHERE is_banned = 0
-            ORDER BY total_xp DESC LIMIT 10
-        """).fetchall()
-
     # ==============================================================================
-    # CHAT & PDF
+    # CHAT HISTORY
     # ==============================================================================
-    def add_chat_history(self, user_id: int, subject: str, query: str, response: str):
-        self.increment_daily_question(user_id)
+    def add_chat_message(self, user_id: int, subject: str, user_message: str, ai_response: str, xp_earned: int = 0):
         self.conn.execute(
-            "INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?, ?, ?, ?)",
-            (user_id, subject, query, response)
+            "INSERT INTO chat_history (user_id, subject, user_message, ai_response, xp_earned) VALUES (?, ?, ?, ?, ?)",
+            (user_id, subject, user_message, ai_response, xp_earned)
         )
         self.conn.commit()
 
-    def get_chat_history(self, user_id: int) -> List[Dict]:
+    def get_chat_history(self, user_id: int, limit: int = 20) -> List[Dict]:
         rows = self.conn.execute(
-            "SELECT * FROM chat_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 20",
-            (user_id,)
+            "SELECT * FROM chat_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (user_id, limit)
         ).fetchall()
-        return [dict(row) for row in rows]
-
+        # History is retrieved newest first, reverse for chat display
+        return [dict(row) for row in rows][::-1] 
+    
     # ==============================================================================
     # PAYMENTS
     # ==============================================================================
@@ -363,7 +205,7 @@ class Database:
         self.conn.execute("UPDATE payments SET status = 'approved' WHERE id = ?", (payment_id,))
         row = self.conn.execute("SELECT user_id FROM payments WHERE id = ?", (payment_id,)).fetchone()
         if row:
-            self.upgrade_to_premium(row["user_id"])
+            self.upgrade_to_premium(dict(row)["user_id"])
         self.conn.commit()
 
     def reject_manual_payment(self, payment_id: int):
