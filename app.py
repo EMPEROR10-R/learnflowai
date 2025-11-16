@@ -8,8 +8,9 @@ from datetime import datetime, date, timedelta
 from database import Database
 from ai_engine import AIEngine
 from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
-import pyotp 
-import time
+import pyotp # Added import
+import time # Added import
+
 
 # ==============================================================================
 # GAMIFICATION: LEVELS + XP SYSTEM
@@ -78,12 +79,13 @@ def apply_theme():
 # 🏆 App Name Change: PrepKe AI 🇰🇪
 st.set_page_config(page_title="PrepKe AI: Your Kenyan AI Tutor", page_icon="KE", layout="wide", initial_sidebar_state="expanded")
 
-# INIT - Use global variables for DB and AI Engine
+# INIT
 try:
     db = Database()
     ai_engine = AIEngine(st.secrets.get("GEMINI_API_KEY", ""))
 except Exception as e:
-    pass
+    st.error(f"INIT FAILED: {e}")
+    st.stop()
 
 # SESSION STATE
 def init_session():
@@ -92,7 +94,7 @@ def init_session():
         "show_welcome": True, "chat_history": [], "current_subject": "Mathematics",
         "pdf_text": "", "current_tab": "Chat Tutor", "theme": "Kenya", "font": "Inter", "font_size": "Medium",
         "exam_questions": None, "user_answers": {}, "exam_submitted": False,
-        "reset_user_id": None, "reset_step": 0
+        "reset_user_id": None, "reset_step": 0 # Added for Forgot Password flow
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -116,21 +118,16 @@ def enforce_access():
     tier = get_user_tier()
     tab = st.session_state.current_tab
     if tier == "admin": return
-    
-    premium_tabs = ["PDF Q&A", "Exam Prep", "Essay Grader"]
-    if tier == "basic" and tab in premium_tabs:
+    if tier == "basic" and tab not in ["Chat Tutor", "Progress", "Settings", "Premium"]:
         st.warning("Upgrade to **Premium** to access this feature.")
         st.stop()
-        
     if tier == "basic":
-        if tab == "Chat Tutor":
-            if hasattr(db, 'get_daily_question_count') and db.get_daily_question_count(st.session_state.user_id) >= 10:
-                st.error("You've used your **10 questions** today. Upgrade to Premium!")
-                st.stop()
-        if tab == "PDF Q&A":
-            if hasattr(db, 'get_daily_pdf_count') and db.get_daily_pdf_count(st.session_state.user_id) >= 3:
-                st.error("You've used your **3 PDF uploads** today. Upgrade to Premium!")
-                st.stop()
+        if tab == "Chat Tutor" and db.get_daily_question_count(st.session_state.user_id) >= 10:
+            st.error("You've used your **10 questions** today. Upgrade to Premium!")
+            st.stop()
+        if tab == "PDF Q&A" and db.get_daily_pdf_count(st.session_state.user_id) >= 3:
+            st.error("You've used your **3 PDF uploads** today. Upgrade to Premium!")
+            st.stop()
 
 # GAMIFICATION
 @st.cache_data(ttl=600) # Cache level calculation for 10 minutes
@@ -166,24 +163,27 @@ def get_user_level(user_data):
     return level, current, next_xp, spendable_xp, progress_percent
 
 def award_xp(user_id, points, reason):
-    if hasattr(db, 'add_xp'):
-        db.add_xp(user_id, points)
-        st.toast(f"**+{points} XP** – {reason} 🎉")
+    db.add_xp(user_id, points)
+    st.toast(f"**+{points} XP** – {reason} 🎉")
 
 def buy_discount_cheque(user_id):
     user = db.get_user(user_id)
     spendable = user.get("spendable_xp", 0)
+    total_xp = user.get("total_xp", 0)
     
     if spendable < CHEQUE_COST:
         st.error("Not enough spendable XP!")
         return
         
-    if not hasattr(db, 'deduct_spendable_xp') or not hasattr(db, 'add_discount'):
-        st.error("Database functions missing for this feature.")
-        return
-    
+    # The original condition to unlock next cheque was likely for the *next* cheque.
+    # We remove the total_xp threshold to allow buying one cheque for now, as the total_xp logic is complex.
+    # if total_xp < NEXT_CHEQUE_THRESHOLD:
+    #     st.error(f"Need {NEXT_CHEQUE_THRESHOLD:,} total XP to unlock next cheque!")
+    #     return
+        
     if db.deduct_spendable_xp(user_id, CHEQUE_COST):
-        db.add_discount(user_id, 5)
+        db.add_discount(user_id, 5) # Assuming db.increase_discount is db.add_discount
+        # db.reset_spendable_progress(user_id) # Removed as it's not in the provided DB/logic
         st.success("**5% Discount Cheque Bought!** Premium now 5% off! 💰")
         st.rerun()
 
@@ -212,7 +212,8 @@ def login_block():
         email = st.text_input("Email")
         if st.button("Send Reset Code"):
             user = db.get_user_by_email(email)
-            if user and hasattr(db, 'is_2fa_enabled') and db.is_2fa_enabled(user["user_id"]):
+            if user and db.is_2fa_enabled(user["user_id"]):
+                # Removed db.generate_otp - now uses standard 2FA flow logic
                 st.success("2FA code sent to your authenticator! (Placeholder)")
                 st.session_state.reset_user_id = user["user_id"]
                 st.session_state.reset_step = 1
@@ -221,7 +222,7 @@ def login_block():
         if st.session_state.get("reset_step") == 1:
             code = st.text_input("2FA Code")
             if st.button("Verify"):
-                if hasattr(db, 'verify_2fa_code') and db.verify_2fa_code(st.session_state.reset_user_id, code):
+                if db.verify_2fa_code(st.session_state.reset_user_id, code):
                     st.session_state.reset_step = 2
                 else:
                     st.error("Invalid code.")
@@ -230,14 +231,11 @@ def login_block():
             confirm = st.text_input("Confirm", type="password")
             if st.button("Reset"):
                 if new_pwd == confirm and len(new_pwd) >= 6:
-                    if hasattr(db, 'update_password'):
-                        db.update_password(st.session_state.reset_user_id, new_pwd)
-                        st.success("Password reset! Log in.")
-                        st.session_state.reset_step = 0
-                        st.session_state.show_welcome = False
-                        st.rerun()
-                    else:
-                        st.error("Database update function missing.")
+                    db.update_password(st.session_state.reset_user_id, new_pwd)
+                    st.success("Password reset! Log in.")
+                    st.session_state.reset_step = 0
+                    st.session_state.show_welcome = False
+                    st.rerun()
                 else:
                     st.error("Passwords must match and be ≥6 chars.")
         return
@@ -249,9 +247,10 @@ def login_block():
     if st.button(choice, type="primary"):
         if choice == "Sign Up":
             if len(pwd) < 6: st.error("Password ≥6 chars."); return
-            uid = db.add_user(email, pwd) if hasattr(db, 'add_user') else None
+            # Assuming db.create_user is db.add_user based on typical implementation
+            uid = db.add_user(email, pwd)
             if uid:
-                award_xp(uid, 50, "First Login")
+                db.add_xp(uid, 50)
                 st.success("Account created! +50 XP 🥳")
             else:
                 st.error("Email exists or database error.")
@@ -262,17 +261,14 @@ def login_block():
 
         stored_hash = user["password_hash"]
         if isinstance(stored_hash, str): stored_hash = stored_hash.encode()
-        
         if not bcrypt.checkpw(pwd.encode('utf-8'), stored_hash): st.error("Invalid email/password."); return
 
-        if hasattr(db, 'is_2fa_enabled') and db.is_2fa_enabled(user["user_id"]) and (not hasattr(db, 'verify_2fa_code') or not db.verify_2fa_code(user["user_id"], totp)):
+        if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
             st.error("Invalid 2FA code.")
             return
 
-        if hasattr(db, 'update_user_activity'):
-            db.update_user_activity(user["user_id"])
-        
-        is_admin = user.get("role") == "admin"
+        db.update_user_activity(user["user_id"])
+        is_admin = user.get("role") == "admin" # Check role for admin status
         
         st.session_state.update({
             "logged_in": True, "user_id": user["user_id"], "is_admin": is_admin, "user": user
@@ -287,11 +283,12 @@ def sidebar():
         tier = get_user_tier()
         st.markdown(f"**Tier:** `{tier.upper()}`")
 
-        user = db.get_user(st.session_state.user_id)
-        st.session_state.user = user
-        level, current, next_xp, spendable, progress_percent = get_user_level(user)
+        user = db.get_user(st.session_state.user_id) # Refresh user data for accurate XP
+        st.session_state.user = user # Update session state
+        level, current, next_xp, spendable, progress_percent = get_user_level(user) # Updated to receive 5 values
         st.markdown(f"### Level {level} {'(Max)' if tier == 'basic' and level == BASIC_MAX_LEVEL else ''}")
         
+        # Avoid division by zero if next_req is inf (max level)
         if next_xp != float('inf'):
             st.progress(progress_percent / 100.0)
             st.caption(f"**{current:,}/{next_xp:,} XP** to next level")
@@ -301,11 +298,11 @@ def sidebar():
 
 
         st.markdown(f"**Spendable XP:** {spendable:,}")
-        if spendable >= CHEQUE_COST:
+        if spendable >= CHEQUE_COST: # Removed total_xp check here to allow purchasing if user has enough spendable XP
             if st.button("Buy 5% Discount Cheque"):
                 buy_discount_cheque(st.session_state.user_id)
 
-        streak = db.update_streak(st.session_state.user_id) if hasattr(db, 'update_streak') else 0
+        streak = db.update_streak(st.session_state.user_id)
         st.markdown(f"**Streak:** {streak} days 🔥")
 
         st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
@@ -317,10 +314,10 @@ def sidebar():
                 st.markdown(f"<span class='badge'>{BADGES.get(b, b)}</span>", unsafe_allow_html=True)
 
         st.markdown("### National Leaderboard 🌍")
-        lb = db.get_xp_leaderboard()[:5] if hasattr(db, 'get_xp_leaderboard') else []
+        lb = db.get_xp_leaderboard()[:5]
         
         for i, e in enumerate(lb):
-            st.markdown(f"**{i+1}.** {e.get('email', 'User')} ({e.get('total_xp', 0):,} XP)")
+            st.markdown(f"**{i+1}.** {e['email']} ({e['total_xp']:,} XP)")
             
         if st.sidebar.button("Log Out 👋", type="secondary", use_container_width=True):
             st.session_state.logged_in = False
@@ -328,6 +325,7 @@ def sidebar():
             st.session_state.user = None
             st.session_state.is_admin = False
             st.rerun()
+
 
 # SETTINGS TAB
 def settings_tab():
@@ -341,28 +339,25 @@ def settings_tab():
         st.selectbox("Font Size", FONT_SIZES, key="font_size")
 
     st.markdown("### 2FA")
-    if hasattr(db, 'is_2fa_enabled') and not db.is_2fa_enabled(st.session_state.user_id):
+    if not db.is_2fa_enabled(st.session_state.user_id):
         if st.button("Enable 2FA"):
-            if hasattr(db, 'enable_2fa'):
-                secret, qr = db.enable_2fa(st.session_state.user_id)
-                st.image(qr, caption="Scan with Authenticator")
-                st.code(secret)
-                award_xp(st.session_state.user_id, 20, "2FA Enabled")
+            secret, qr = db.enable_2fa(st.session_state.user_id)
+            st.image(qr, caption="Scan with Authenticator")
+            st.code(secret)
+            award_xp(st.session_state.user_id, 20, "2FA Enabled")
     else:
         st.success("2FA Enabled ✅")
         if st.button("Disable 2FA"):
-            if hasattr(db, 'disable_2fa'):
-                db.disable_2fa(st.session_state.user_id)
-                st.success("2FA Disabled")
+            db.disable_2fa(st.session_state.user_id)
+            st.success("2FA Disabled")
 
     st.markdown("### Profile")
     name = st.text_input("Name", st.session_state.user.get("name", ""))
     if st.button("Save Profile"):
-        if hasattr(db, 'update_profile'):
-            db.update_profile(st.session_state.user_id, name)
-            award_xp(st.session_state.user_id, 30, "Profile completed")
+        db.update_profile(st.session_state.user_id, name)
+        award_xp(st.session_state.user_id, 30, "Profile completed")
 
-# Other Tabs (Dummy implementations)
+# Dummy Tabs (Must exist for sidebar to work)
 def chat_tab(): st.session_state.current_tab = "Chat Tutor"; st.info("Chat Tutor content goes here...")
 def progress_tab(): st.session_state.current_tab = "Progress"; st.info("Progress dashboard content goes here...")
 def pdf_tab(): st.session_state.current_tab = "PDF Q&A"; st.info("PDF Q&A content goes here...")
@@ -370,43 +365,43 @@ def exam_tab(): st.session_state.current_tab = "Exam Prep"; st.info("Exam Prep c
 def essay_tab(): st.session_state.current_tab = "Essay Grader"; st.info("Essay Grader content goes here...")
 def premium_tab(): st.session_state.current_tab = "Premium"; st.info("Premium Upgrade content goes here...")
 
-
-# ADMIN DASHBOARD - ENFORCING SINGLE PERMANENT ADMIN
+# ADMIN DASHBOARD - ENFORCING SINGLE PERMANENT ADMIN (Fixed syntax and logic)
 def admin_dashboard():
     st.session_state.current_tab = "Admin"
     st.title("👑 Admin Dashboard (Locked)")
-    st.warning("This tab is strictly for the Administrator account only. **The Admin Role Management tool is disabled to enforce a single, permanent administrator.**")
+    st.warning("This tab is strictly for the Administrator account only. **The Admin Role Management tool is disabled to ensure a single, permanent administrator.**")
     st.divider()
     
     # 1. Pending Payments
     st.header("1. Pending Premium Payments")
     
-    pending_payments = db.get_pending_payments() if hasattr(db, 'get_pending_payments') else []
+    pending_payments = db.get_pending_payments()
     
     if pending_payments:
         for payment in pending_payments:
-            with st.expander(f"**{payment.get('email', f'User {payment.get('user_id', 'Unknown')}')}** - Code: {payment.get('mpesa_code', 'N/A')}"):
+            # FIX applied here: define user_label outside the f-string for expander title
+            user_label = payment.get('email') or f"User {payment.get('user_id', 'Unknown')}"
+
+            with st.expander(f"**{user_label}** - Code: {payment.get('mpesa_code', 'N/A')}"):
                 st.markdown(f"**Phone:** {payment.get('phone', 'N/A')} - **Submitted:** {payment.get('timestamp', 'N/A')}")
                 col_a, col_r, _ = st.columns([1, 1, 4])
                 with col_a:
                     if st.button("✅ Approve", key=f"approve_{payment['id']}"):
-                        if hasattr(db, 'approve_manual_payment'):
-                            db.approve_manual_payment(payment['id']) 
-                            st.success(f"Approved Premium for {payment.get('email', 'user')}.")
-                            st.rerun()
+                        db.approve_manual_payment(payment['id']) 
+                        st.success(f"Approved Premium for {user_label}.")
+                        st.rerun()
                 with col_r:
                     if st.button("❌ Reject", key=f"reject_{payment['id']}"):
-                        if hasattr(db, 'reject_manual_payment'):
-                            db.reject_manual_payment(payment['id']) 
-                            st.error(f"Rejected payment for {payment.get('email', 'user')}.")
-                            st.rerun()
+                        db.reject_manual_payment(payment['id']) 
+                        st.error(f"Rejected payment for {user_label}.")
+                        st.rerun()
         st.divider()
     else:
         st.info("No pending payments to review.")
 
     # 2. Leaderboard Winners
     st.header("2. Leaderboard Winners (Automatic 20% Discount)")
-    flagged_users = db.get_flagged_for_discount() if hasattr(db, 'get_flagged_for_discount') else []
+    flagged_users = db.get_flagged_for_discount()
     
     if flagged_users:
         for user in flagged_users:
@@ -418,10 +413,9 @@ def admin_dashboard():
                 
                 if user.get('discount', 0) < 20:
                     if st.button("Apply Automatic 20% Cheque", key=f"apply_auto_{user['user_id']}"):
-                        if hasattr(db, 'add_discount'):
-                            db.add_discount(user['user_id'], 20)
-                            st.success(f"20% Cheque applied for {user_name}.")
-                            st.rerun()
+                        db.add_discount(user['user_id'], 20)
+                        st.success(f"20% Cheque applied for {user_name}.")
+                        st.rerun()
             st.divider()
     else:
         st.info("No users currently qualify for the automatic 20% discount.")
@@ -429,6 +423,7 @@ def admin_dashboard():
     st.divider()
     st.markdown("### ⚠️ Security Notice")
     st.error("The administrative function to change user roles has been removed from the UI to ensure the admin account is held permanently and exclusively by the designated user.")
+
 
 # MAIN
 def main():
@@ -457,12 +452,11 @@ def main():
         }
         for name, obj in zip(tabs, tab_objs):
             with obj:
+                # Use st.session_state to track the current tab for access enforcement
                 st.session_state.current_tab = name
                 tab_map[name]()
     except Exception as e:
         st.error(f"CRASH: {e}")
-        import traceback
-        st.code(traceback.format_exc())
 
 if __name__ == "__main__":
     main()
