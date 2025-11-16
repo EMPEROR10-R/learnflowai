@@ -71,15 +71,16 @@ def ensure_schema():
     ]:
         c.execute(sql)
 
-    # ADD MISSING COLUMNS (safe: ignore if exists)
-    for col in [
+    # ADD MISSING COLUMNS (safe)
+    for col, col_type in [
         ("daily_questions", "INTEGER DEFAULT 0"),
         ("last_question_date", "TEXT"),
         ("daily_pdf_uploads", "INTEGER DEFAULT 0"),
-        ("last_pdf_date", "TEXT")
+        ("last_pdf_date", "TEXT"),
+        ("twofa_secret", "TEXT")
     ]:
         try:
-            c.execute(f"ALTER TABLE users ADD COLUMN {col[0]} {col[1]}")
+            c.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError:
             pass  # Already exists
 
@@ -181,6 +182,28 @@ class Database:
     def is_admin(self, user_id):
         user = self.get_user(user_id)
         return user and user["role"] == "admin"
+
+    # 2FA METHODS (SAFE)
+    def is_2fa_enabled(self, user_id):
+        try:
+            c = self._c()
+            c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
+            row = c.fetchone()
+            return bool(row and row["twofa_secret"])
+        except:
+            return False
+
+    def verify_2fa_code(self, user_id, code):
+        try:
+            c = self._c()
+            c.execute("SELECT twofa_secret FROM users WHERE user_id = ?", (user_id,))
+            row = c.fetchone()
+            if not row or not row["twofa_secret"]:
+                return False
+            totp = pyotp.TOTP(row["twofa_secret"])
+            return totp.verify(code)
+        except:
+            return False
 
     # LIMITS
     def can_ask_question(self, user_id):
