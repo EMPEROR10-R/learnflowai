@@ -9,7 +9,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 
 class Database:
-    def __init__(self, db_path: str = "prepke.db"): # Changed DB file name
+    def __init__(self, db_path: str = "prepke.db"):
         self.db_path = db_path
         # Ensures cross-platform compatibility for Streamlit concurrency
         self.conn = sqlite3.connect(db_path, check_same_thread=False) 
@@ -108,22 +108,16 @@ class Database:
         """)
 
     # ==============================================================================
-    # USER AUTHENTICATION & RETRIEVAL (CRASH FIX RELATED)
+    # USER AUTHENTICATION & RETRIEVAL (Includes crash fixes)
     # ==============================================================================
     
     def get_user_by_email(self, email: str) -> Optional[Dict]:
-        """
-        Retrieves a user by email, returns dict or None.
-        Returns None if no user is found, preventing the 'get' error.
-        """
+        """Retrieves a user by email, returns dict or None."""
         row = self.conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
         return dict(row) if row else None 
 
     def get_user_data(self, user_id: int) -> Optional[Dict]:
-        """
-        Retrieves a user by ID, returns dict or None.
-        Returns None if no user is found, preventing the 'get' error.
-        """
+        """Retrieves a user by ID, returns dict or None."""
         row = self.conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         return dict(row) if row else None
         
@@ -135,6 +129,21 @@ class Database:
         )
         self.conn.commit()
         return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    
+    # ==============================================================================
+    # 2FA RETRIEVAL (New function for password reset)
+    # ==============================================================================
+
+    def get_2fa_secret(self, user_id: int) -> Optional[str]:
+        """Retrieves the 2FA secret key for a user if 2FA is enabled."""
+        row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ? AND is_enabled = 1", (user_id,)).fetchone()
+        # Ensure we return the secret string, or None if no row is found/2FA disabled
+        return dict(row)['secret'] if row else None
+
+
+    # ==============================================================================
+    # USER ACCOUNT MANAGEMENT
+    # ==============================================================================
 
     def upgrade_to_premium(self, user_id: int):
         expiry_date = (datetime.now() + timedelta(days=30)).isoformat()
@@ -151,10 +160,6 @@ class Database:
         )
         self.conn.commit()
         
-    # ==============================================================================
-    # XP AND BADGES
-    # ==============================================================================
-    
     def update_user_xp(self, user_id: int, xp_change: int):
         self.conn.execute(
             "UPDATE users SET total_xp = total_xp + ?, spendable_xp = spendable_xp + ? WHERE user_id = ?",
