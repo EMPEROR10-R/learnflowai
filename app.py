@@ -1,4 +1,4 @@
-# app.py - FIXED with custom Admin Credentials and Admin Dashboard
+# app.py - FIXED: Implemented functional Chat Tutor and fixed login
 import streamlit as st
 import bcrypt
 import json
@@ -12,8 +12,7 @@ import pyotp
 import time
 
 # ────────────────────────────── ADMIN CONFIG ──────────────────────────────
-# ⚠️ WARNING: Change these credentials in your local file ONLY
-# This is for the one-time creation/promotion of the initial admin account.
+# Admin log ins: email: kingmumo15@gmail.com and password is: @Yoounruly10
 DEFAULT_ADMIN_EMAIL = "kingmumo15@gmail.com"
 DEFAULT_ADMIN_PASSWORD = "@Yoounruly10" 
 # ──────────────────────────────────────────────────────────────────────────
@@ -48,7 +47,6 @@ XP_RULES = {
 
 # DISCOUNT CHEQUES
 CHEQUE_COST = 500000  # XP to buy 5% discount
-NEXT_CHEQUE_THRESHOLD = 100_000_000 
 MAX_DISCOUNT = 50  # Max 50% discount
 
 # ────────────────────────────── THEME & UI ──────────────────────────────
@@ -87,9 +85,10 @@ st.set_page_config(page_title="PrepKe AI: Your Kenyan AI Tutor", page_icon="KE",
 # INIT
 try:
     db = Database()
-    # Assuming AIEngine is available and correctly initialized
     ai_engine = AIEngine(st.secrets.get("GEMINI_API_KEY", "")) 
 except Exception as e:
+    # This will now only crash if DB or AI engine has a critical connection error, 
+    # not a missing column, as that is handled by _alter_tables_for_compatibility
     st.error(f"INIT FAILED: {e}")
     st.stop()
 
@@ -111,7 +110,6 @@ def get_user_tier():
     if st.session_state.is_admin: return "admin"
     user = db.get_user(st.session_state.user_id)
     if not user: return "basic"
-    # Re-check admin status based on database for robustness
     if user.get("role") == "admin":
         st.session_state.is_admin = True
         return "admin"
@@ -206,7 +204,6 @@ def login_block():
     st.markdown("### Login / Sign Up")
     choice = st.radio("Action", ["Login", "Sign Up", "Forgot Password"], horizontal=True, label_visibility="collapsed")
     
-    # ... (Forgot Password logic is kept as per previous turn) ...
     if choice == "Forgot Password":
         email = st.text_input("Email")
         if st.button("Send Reset Code"):
@@ -240,20 +237,21 @@ def login_block():
 
     email = st.text_input("Email", key=f"{choice.lower()}_email")
     pwd = st.text_input("Password", type="password", key=f"{choice.lower()}_pwd")
-    totp = st.text_input("2FA Code", key="totp") if choice == "Login" else ""
+    totp = st.text_input("2FA Code", key="totp") if choice == "Login" and db.get_user_by_email(email) and db.is_2fa_enabled(db.get_user_by_email(email)["user_id"]) else ""
 
     if st.button(choice, type="primary"):
         if choice == "Sign Up":
             if len(pwd) < 6: st.error("Password ≥6 chars."); return
-            uid = db.create_user(email, pwd)
+            # FIX: Use db.add_user
+            uid = db.add_user(email, pwd) 
             if uid:
-                db.add_xp(uid, 50)
+                award_xp(uid, XP_RULES["first_login"], "First Login Bonus")
                 st.success("Account created! +50 XP 🥳")
             else:
                 st.error("Email exists or database error.")
             return
 
-        # --- ADMIN AUTO-PROMOTION LOGIC (FIXED) ---
+        # --- ADMIN AUTO-PROMOTION LOGIC ---
         if email == DEFAULT_ADMIN_EMAIL and pwd == DEFAULT_ADMIN_PASSWORD:
             admin_id = db.ensure_admin_is_set(email, pwd)
             if admin_id:
@@ -261,9 +259,9 @@ def login_block():
                 st.session_state.update({
                     "logged_in": True, "user_id": user["user_id"], "is_admin": True, "user": user
                 })
-                st.success("Welcome, Administrator!")
+                st.success("Welcome, Administrator! The issue is fixed.")
                 st.rerun()
-                return # Stop regular login flow
+                return 
 
         # --- REGULAR LOGIN FLOW ---
         user = db.get_user_by_email(email)
@@ -283,7 +281,7 @@ def login_block():
         st.session_state.update({
             "logged_in": True, "user_id": user["user_id"], "is_admin": is_admin, "user": user
         })
-        award_xp(user["user_id"], 20, "Daily login")
+        award_xp(user["user_id"], XP_RULES["daily_streak"], "Daily login")
         st.rerun()
 
 def sidebar():
@@ -314,11 +312,9 @@ def sidebar():
         streak = db.update_streak(st.session_state.user_id)
         st.markdown(f"**Streak:** {streak} days 🔥")
 
-        # Assuming SUBJECT_PROMPTS is correctly imported
         st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys())) 
 
         badges = json.loads(user.get("badges", "[]"))
-        # Assuming BADGES is correctly imported
         if badges:
             st.markdown("### Badges 🥇")
             for b in badges[:6]:
@@ -337,8 +333,68 @@ def sidebar():
             st.session_state.is_admin = False
             st.rerun()
 
+# --------------------------------------------------------------------------------
+# NEW: CHAT TUTOR IMPLEMENTATION
+# --------------------------------------------------------------------------------
+def chat_tab(): 
+    st.session_state.current_tab = "Chat Tutor"
+    
+    current_subject = st.session_state.current_subject
+    user_id = st.session_state.user_id
+    
+    st.header(f"{current_subject} Tutor 🧑‍🏫")
+    
+    # Check daily limit
+    daily_count = db.get_daily_question_count(user_id)
+    if get_user_tier() == "basic" and daily_count >= 10:
+        st.error(f"Daily limit reached: {daily_count}/10 questions. Please upgrade to Premium.")
+        st.stop()
+    elif get_user_tier() == "basic":
+        st.info(f"You have {10 - daily_count} free questions remaining today.")
 
-# SETTINGS TAB
+    # 1. Load chat history for the current subject
+    chat_history = db.get_chat_history(user_id, current_subject)
+    
+    # 2. Display chat history
+    for message in chat_history:
+        with st.chat_message("user"):
+            st.markdown(message["user_query"])
+        with st.chat_message("assistant"):
+            st.markdown(message["ai_response"])
+
+    # 3. Handle new user input
+    if prompt := st.chat_input("Ask your Kenyan AI Tutor a question..."):
+        
+        # Display user message
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Generate response from AI
+        with st.chat_message("assistant"):
+            # Get the history to provide context to the AI
+            context_history = "\n".join([f"User: {m['user_query']}\nAI: {m['ai_response']}" for m in chat_history])
+            
+            # Use the enhanced prompt for the current subject
+            full_prompt = get_enhanced_prompt(current_subject, prompt, context=context_history)
+            
+            # Stream the response
+            response = ai_engine.stream_response(full_prompt)
+            full_response = st.write_stream(response)
+        
+        # 4. Update database and reward user
+        if full_response:
+            db.add_chat_history(user_id, current_subject, prompt, full_response)
+            db.increment_daily_question(user_id)
+            award_xp(user_id, XP_RULES["question_asked"], "Question asked")
+            st.rerun() # Rerun to refresh daily limit and sidebar XP/streak
+
+
+# Dummy/Placeholder Tabs
+def progress_tab(): st.session_state.current_tab = "Progress"; st.info("Progress dashboard content goes here...")
+def pdf_tab(): st.session_state.current_tab = "PDF Q&A"; st.info("PDF Q&A content goes here...")
+def exam_tab(): st.session_state.current_tab = "Exam Prep"; st.info("Exam Prep content goes here...")
+def essay_tab(): st.session_state.current_tab = "Essay Grader"; st.info("Essay Grader content goes here...")
+def premium_tab(): st.session_state.current_tab = "Premium"; st.info("Premium Upgrade content goes here...")
 def settings_tab():
     st.session_state.current_tab = "Settings"
     st.markdown("### Appearance")
@@ -368,13 +424,6 @@ def settings_tab():
         db.update_profile(st.session_state.user_id, name)
         award_xp(st.session_state.user_id, 30, "Profile completed")
 
-# Dummy Tabs
-def chat_tab(): st.session_state.current_tab = "Chat Tutor"; st.info("Chat Tutor content goes here...")
-def progress_tab(): st.session_state.current_tab = "Progress"; st.info("Progress dashboard content goes here...")
-def pdf_tab(): st.session_state.current_tab = "PDF Q&A"; st.info("PDF Q&A content goes here...")
-def exam_tab(): st.session_state.current_tab = "Exam Prep"; st.info("Exam Prep content goes here...")
-def essay_tab(): st.session_state.current_tab = "Essay Grader"; st.info("Essay Grader content goes here...")
-def premium_tab(): st.session_state.current_tab = "Premium"; st.info("Premium Upgrade content goes here...")
 
 # ADMIN DASHBOARD - The payment approval and discount tool
 def admin_dashboard():
@@ -389,7 +438,6 @@ def admin_dashboard():
     
     if pending_payments:
         for payment in pending_payments:
-            # FIX: user email is now correctly returned via the JOIN in database.py
             user_label = payment.get('email') or f"User {payment.get('user_id', 'Unknown')}"
 
             with st.expander(f"**{user_label}** - Code: {payment.get('mpesa_code', 'N/A')}"):
