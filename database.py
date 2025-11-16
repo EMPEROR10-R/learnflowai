@@ -1,4 +1,4 @@
-# database.py - FIXED: Robust schema compatibility to prevent 'duplicate column' errors
+# database.py
 import sqlite3
 import bcrypt
 import json
@@ -9,37 +9,12 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 
 class Database:
-    def __init__(self, db_path: str = "prepke.db"):
+    def __init__(self, db_path: str = "prepke.db"): # Changed DB file name
         self.db_path = db_path
+        # Ensures cross-platform compatibility for Streamlit concurrency
         self.conn = sqlite3.connect(db_path, check_same_thread=False) 
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
-        self._alter_tables_for_compatibility() # NEW: Ensures all columns exist safely
-
-    def _get_table_columns(self, table_name: str) -> List[str]:
-        """Utility to get a list of column names for a table."""
-        cursor = self.conn.execute(f"PRAGMA table_info({table_name})")
-        return [row[1] for row in cursor.fetchall()]
-
-    def _check_and_add_column(self, table_name: str, column_name: str, column_type: str):
-        """Adds a column only if it doesn't already exist."""
-        if column_name not in self._get_table_columns(table_name):
-            try:
-                self.conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
-                self.conn.commit()
-            except sqlite3.OperationalError as e:
-                # Catch specific errors (e.g., if another thread/process added it)
-                print(f"Warning: Could not add column {column_name} to {table_name}: {e}")
-
-    def _alter_tables_for_compatibility(self):
-        """Checks for and adds missing columns to existing tables for schema evolution."""
-        # Fix for CRASH: no such column: user_query / duplicate column name: ai_response
-        self._check_and_add_column("chat_history", "user_query", "TEXT")
-        self._check_and_add_column("chat_history", "ai_response", "TEXT")
-        
-        # Add a placeholder column to users just in case it's missing from old versions
-        self._check_and_add_column("users", "last_daily_reset", "TEXT")
-
 
     def _create_tables(self):
         self.conn.executescript("""
@@ -79,19 +54,18 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             subject TEXT,
-            user_query TEXT,            
-            ai_response TEXT,           
+            user_query TEXT,
+            ai_response TEXT,
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
         );
 
-        -- Scores (Used for Exam and Essay results)
+        -- Scores
         CREATE TABLE IF NOT EXISTS scores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
-            category TEXT,  -- 'exam', 'essay'
-            score REAL,     -- 0-100 score
-            details TEXT,   -- JSON for exam/essay feedback/questions
+            category TEXT,  -- chat, exam, essay
+            score REAL,
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
         );
@@ -131,7 +105,7 @@ class Database:
     def get_user_by_email(self, email: str) -> Optional[Dict]:
         row = self.conn.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone()
         return dict(row) if row else None
-        
+
     def get_all_users(self) -> List[Dict]:
         rows = self.conn.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
         return [dict(row) for row in rows]
@@ -152,13 +126,21 @@ class Database:
     def ban_user(self, user_id: int):
         self.conn.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,))
         self.conn.commit()
+    
+    def unban_user(self, user_id: int): # NEW
+        self.conn.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
+        self.conn.commit()
 
     def upgrade_to_premium(self, user_id: int):
         expiry = (date.today() + timedelta(days=30)).isoformat()
         self.conn.execute(
-            "UPDATE users SET is_premium = 1, premium_expiry = ?, role = 'premium' WHERE user_id = ?",
+            "UPDATE users SET is_premium = 1, premium_expiry = ?, role = 'premium' WHERE user_id = ?", # Added role update
             (expiry, user_id)
         )
+        self.conn.commit()
+
+    def downgrade_to_basic(self, user_id: int): # NEW
+        self.conn.execute("UPDATE users SET is_premium = 0, premium_expiry = NULL, role = 'user' WHERE user_id = ?", (user_id,)) # Added role update
         self.conn.commit()
 
     def check_premium_validity(self, user_id: int) -> bool:
@@ -172,22 +154,23 @@ class Database:
         self.conn.commit()
 
     # ==============================================================================
-    # 2FA (Kept for completeness)
+    # 2FA
     # ==============================================================================
     def enable_2fa(self, user_id: int):
         secret = pyotp.random_base32()
         self.conn.execute(
-            "INSERT OR REPLACE INTO user_2fa (user_id, secret, enabled) VALUES (?, ?, 1)",
+            "INSERT OR REPLACE INTO user_2fa (user_id, secret) VALUES (?, ?)",
             (user_id, secret)
         )
         self.conn.commit()
-        return secret, self.get_2fa_qr(user_id) 
+        return secret, self.get_2fa_qr(user_id)
 
     def get_2fa_qr(self, user_id: int):
         user = self.get_user(user_id)
         secret_row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
         if not secret_row: return None
         secret = secret_row["secret"]
+        # 🇰🇪 Changed Issuer Name to PrepKe AI
         totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(name=user["email"], issuer_name="PrepKe AI") 
         qr = qrcode.make(totp_uri)
         buffered = io.BytesIO()
@@ -207,7 +190,12 @@ class Database:
     def disable_2fa(self, user_id: int):
         self.conn.execute("DELETE FROM user_2fa WHERE user_id = ?", (user_id,))
         self.conn.commit()
-    
+
+    def generate_otp(self, user_id: int) -> str:
+        row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
+        if not row: return ""
+        return pyotp.TOTP(row["secret"]).now()
+
     # ==============================================================================
     # DAILY LIMITS
     # ==============================================================================
@@ -264,69 +252,84 @@ class Database:
         )
         self.conn.commit()
 
-    def update_streak(self, user_id: int) -> int:
-        """Handles streak updates and returns the new streak."""
-        user = self.get_user(user_id)
-        if not user: return 0
-            
-        today = date.today()
-        last_streak_date_str = user.get("last_streak_date")
-        current_streak = user.get("streak", 0)
+    def reset_spendable_progress(self, user_id: int):
+        self.conn.execute("UPDATE users SET spendable_xp = 0 WHERE user_id = ?", (user_id,))
+        self.conn.commit()
 
-        new_streak = current_streak
-        
-        if last_streak_date_str:
-            last_streak_date = date.fromisoformat(last_streak_date_str)
-            
-            if last_streak_date == today:
-                return current_streak
-            
-            yesterday = today - timedelta(days=1)
-            
-            if last_streak_date == yesterday:
-                new_streak += 1
-            else:
-                new_streak = 1
-        else:
-            new_streak = 1
+    def add_badge(self, user_id: int, badge_key: str):
+        user = self.get_user(user_id)
+        badges = json.loads(user["badges"])
+        if badge_key not in badges:
+            badges.append(badge_key)
+            self.conn.execute("UPDATE users SET badges = ? WHERE user_id = ?", (json.dumps(badges), user_id))
+            self.conn.commit()
+
+    def update_streak(self, user_id: int) -> int:
+        user = self.get_user(user_id)
+        today = date.today()
+        last_date = date.fromisoformat(user["last_streak_date"]) if user["last_streak_date"] else None
+        streak = user["streak"]
+
+        if last_date == today - timedelta(days=1):
+            streak += 1
+        elif last_date != today:
+            streak = 1
 
         self.conn.execute(
             "UPDATE users SET streak = ?, last_streak_date = ? WHERE user_id = ?",
-            (new_streak, today.isoformat(), user_id)
+            (streak, today.isoformat(), user_id)
         )
+        # Daily streak bonus XP
+        self.add_xp(user_id, 20, spendable=False) 
         self.conn.commit()
-        return new_streak
+        return streak
 
     # ==============================================================================
     # SCORES & LEADERBOARDS
     # ==============================================================================
-    def add_score(self, user_id: int, category: str, score: float, details: Dict):
-        details_json = json.dumps(details)
+    def add_score(self, user_id: int, category: str, score: float):
         self.conn.execute(
-            "INSERT INTO scores (user_id, category, score, details) VALUES (?, ?, ?, ?)",
-            (user_id, category, score, details_json)
+            "INSERT INTO scores (user_id, category, score) VALUES (?, ?, ?)",
+            (user_id, category, score)
         )
         self.conn.commit()
 
     def get_user_scores(self, user_id: int) -> List[Dict]:
         rows = self.conn.execute(
-            "SELECT category, score, details, timestamp FROM scores WHERE user_id = ? ORDER BY timestamp DESC LIMIT 50",
+            "SELECT category, score, timestamp FROM scores WHERE user_id = ? ORDER BY timestamp DESC LIMIT 50",
             (user_id,)
         ).fetchall()
-        history = [dict(row) for row in rows]
-        # Convert JSON string in 'details' back to Dict
-        for item in history:
-            item['details'] = json.loads(item['details'])
-        return history
+        return [dict(row) for row in rows]
+
+    def get_subject_performance(self, user_id: int) -> List[Dict]:
+        rows = self.conn.execute("""
+            SELECT subject, AVG(score) as avg_score
+            FROM chat_history ch
+            JOIN scores s ON ch.user_id = s.user_id AND DATE(ch.timestamp) = DATE(s.timestamp)
+            WHERE ch.user_id = ? AND s.category = 'exam'
+            GROUP BY subject
+        """, (user_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_leaderboard(self, category: str) -> List[Dict]:
+        return self.conn.execute(f"""
+            SELECT u.email, s.score
+            FROM scores s
+            JOIN users u ON s.user_id = u.user_id
+            WHERE s.category = ? AND u.is_banned = 0
+            ORDER BY s.score DESC LIMIT 10
+        """, (category,)).fetchall()
 
     def get_xp_leaderboard(self) -> List[Dict]:
+        # This query is correct and necessary for the XP leaderboard.
         return self.conn.execute("""
-            SELECT email, total_xp
-            FROM users 
+            SELECT email, total_xp,
+                   (SELECT COUNT(*) + 1 FROM users u2 
+                    WHERE u2.total_xp > u1.total_xp AND u2.is_banned = 0) as rank
+            FROM users u1
             WHERE is_banned = 0
             ORDER BY total_xp DESC LIMIT 10
         """).fetchall()
-
 
     # ==============================================================================
     # CHAT & PDF
@@ -339,12 +342,12 @@ class Database:
         )
         self.conn.commit()
 
-    def get_chat_history(self, user_id: int, subject: str) -> List[Dict]:
+    def get_chat_history(self, user_id: int) -> List[Dict]:
         rows = self.conn.execute(
-            "SELECT user_query, ai_response FROM chat_history WHERE user_id = ? AND subject = ? ORDER BY timestamp DESC LIMIT 20",
-            (user_id, subject)
+            "SELECT * FROM chat_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 20",
+            (user_id,)
         ).fetchall()
-        return [dict(row) for row in rows][::-1]
+        return [dict(row) for row in rows]
 
     # ==============================================================================
     # PAYMENTS
@@ -357,12 +360,7 @@ class Database:
         self.conn.commit()
 
     def get_pending_payments(self) -> List[Dict]:
-        rows = self.conn.execute("""
-            SELECT p.*, u.email 
-            FROM payments p 
-            JOIN users u ON p.user_id = u.user_id 
-            WHERE p.status = 'pending'
-            """).fetchall()
+        rows = self.conn.execute("SELECT * FROM payments WHERE status = 'pending'").fetchall()
         return [dict(row) for row in rows]
 
     def approve_manual_payment(self, payment_id: int):
