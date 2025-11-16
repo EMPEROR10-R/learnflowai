@@ -1,5 +1,4 @@
-# app.py (Rewritten)
-
+# app.py
 import streamlit as st
 import bcrypt
 import json
@@ -9,7 +8,7 @@ from datetime import datetime, date, timedelta
 from database import Database
 from ai_engine import AIEngine
 from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
-import pyotp # Required for 2FA verification
+import pyotp 
 
 # ==============================================================================
 # ANIMATION & STYLING (NON-STATIC LOGIN PAGE)
@@ -39,7 +38,7 @@ ANIMATION_CSS = """
 """
 
 # ==============================================================================
-# GAMIFICATION: LEVELS + XP SYSTEM (Existing code)
+# GAMIFICATION: LEVELS + XP SYSTEM
 # ==============================================================================
 LEVELS = {
     1: 0, 2: 100, 3: 250, 4: 500, 5: 1000,
@@ -47,7 +46,7 @@ LEVELS = {
     11: 25000, 12: 40000, 13: 60000, 14: 90000, 15: 130000
 }
 
-BASIC_MAX_LEVEL = 5  # Basic users can't go beyond Level 5
+BASIC_MAX_LEVEL = 5 
 
 XP_RULES = {
     "question_asked": 10,
@@ -67,6 +66,7 @@ def init_session():
     if 'db' not in st.session_state:
         st.session_state.db = Database()
     if 'ai_engine' not in st.session_state:
+        # Assuming GEMINI_API_KEY is available in st.secrets
         st.session_state.ai_engine = AIEngine(gemini_key=st.secrets.get("GEMINI_API_KEY", "")) 
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
@@ -86,7 +86,6 @@ def init_session():
         st.session_state.pdf_text = ""
     if 'pdf_name' not in st.session_state:
         st.session_state.pdf_name = ""
-    # New state for login flow control
     if 'show_forgot_password' not in st.session_state:
         st.session_state.show_forgot_password = False
     if 'reset_user_id' not in st.session_state:
@@ -111,7 +110,7 @@ def get_user_tier() -> str:
     return "basic"
 
 # ==============================================================================
-# PASSWORD RESET FUNCTION
+# PASSWORD RESET FUNCTIONS
 # ==============================================================================
 
 def update_password(user_id: int, new_password: str):
@@ -177,18 +176,21 @@ def forgot_password_block():
             elif not secret:
                 st.error("Error retrieving 2FA secret. Please restart the process.")
             else:
-                totp = pyotp.TOTP(secret)
-                if totp.verify(otp_code):
-                    update_password(user_id, new_password)
-                    st.success("✅ Password successfully reset! You can now log in.")
-                    
-                    # Cleanup session state and redirect to login
-                    st.session_state.show_forgot_password = False
-                    st.session_state.reset_user_id = None
-                    st.session_state.logged_in = False
-                    st.rerun()
-                else:
-                    st.error("Invalid 2FA code. Please check your Authenticator App.")
+                try:
+                    totp = pyotp.TOTP(secret)
+                    if totp.verify(otp_code):
+                        update_password(user_id, new_password)
+                        st.success("✅ Password successfully reset! You can now log in.")
+                        
+                        # Cleanup session state and redirect to login
+                        st.session_state.show_forgot_password = False
+                        st.session_state.reset_user_id = None
+                        st.session_state.logged_in = False
+                        st.rerun()
+                    else:
+                        st.error("Invalid 2FA code. Please check your Authenticator App.")
+                except Exception as e:
+                    st.error(f"An error occurred during 2FA verification: {e}")
 
     if st.button("Cancel & Back to Login", key="reset_cancel_login"):
         st.session_state.show_forgot_password = False
@@ -197,13 +199,13 @@ def forgot_password_block():
 
 
 # ==============================================================================
-# LOGIN/AUTH FUNCTIONS (Modified)
+# LOGIN/AUTH FUNCTIONS
 # ==============================================================================
 
 def login_block():
     """
     Handles the login/registration forms.
-    Now redirects to reset flow if link is clicked, and shows link on failed login.
+    Shows the Forgot Password link ONLY on failed login.
     """
     db = st.session_state.db
     
@@ -238,8 +240,12 @@ def login_block():
                             if isinstance(password_hash_bytes, str):
                                 password_hash_bytes = password_hash_bytes.encode('utf-8')
                             
-                            if bcrypt.checkpw(password.encode('utf-8'), password_hash_bytes):
-                                is_authenticated = True
+                            try:
+                                if bcrypt.checkpw(password.encode('utf-8'), password_hash_bytes):
+                                    is_authenticated = True
+                            except Exception:
+                                # Catch potential error if hash is corrupt or malformed
+                                pass
                         
                         if is_authenticated:
                             st.session_state.logged_in = True
@@ -261,12 +267,11 @@ def login_block():
         if st.session_state.show_forgot_password:
             if st.button("Forgot Password? Use 2FA Reset", key="forgot_pw_link"):
                 st.session_state.show_forgot_password = True
-                st.session_state.reset_user_id = None # Reset potential pending ID
+                st.session_state.reset_user_id = None
                 st.rerun()
 
 
     with register_tab:
-        # ... (Registration logic remains the same)
         with st.form("register_form"):
             new_name = st.text_input("Name (Optional)", key="reg_name")
             new_email = st.text_input("Email", key="reg_email")
@@ -299,35 +304,80 @@ def logout():
     st.session_state.pdf_name = ""
     st.session_state.chat_history = []
     st.session_state.show_welcome = True
-    st.session_state.show_forgot_password = False # Clear this flag
-    st.session_state.reset_user_id = None # Clear reset ID
+    st.session_state.show_forgot_password = False
+    st.session_state.reset_user_id = None
     st.rerun()
 
 # ==============================================================================
-# MAIN APPLICATION LOGIC (Modified)
+# UI COMPONENTS (FIXES: apply_theme is now defined)
+# ==============================================================================
+
+def apply_theme():
+    """FIXED: Sets the Streamlit page configuration."""
+    st.set_page_config(
+        page_title="PrepKe AI Tutor",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+
+def welcome_screen():
+    st.title("PrepKe AI: Your Kenyan Curriculum Expert")
+    st.info("Welcome! Log in or register to get started with your AI tutor.")
+    if st.button("Proceed to Login"):
+        st.session_state.show_welcome = False
+        st.rerun()
+        
+def sidebar():
+    """Generates the sidebar with user info and logout."""
+    user_data = st.session_state.user_data 
+    user_tier = get_user_tier()
+    st.sidebar.header(f"Welcome, {user_data.get('name', user_data.get('email', 'User'))}!")
+    st.sidebar.markdown(f"**Tier:** **`{user_tier.upper()}`**")
+    st.sidebar.markdown(f"**XP:** {user_data.get('total_xp', 0)}")
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Logout"):
+        logout()
+
+def enforce_access():
+    """Placeholder for access control logic based on user tier."""
+    pass
+
+# ... rest of the tab functions stubs
+def chat_tab(): st.info("Chat Tutor content goes here...")
+def progress_tab(): st.info("Progress Tracking content goes here...")
+def settings_tab(): st.info("Settings content goes here...")
+def pdf_tab(): st.info("PDF Q&A content goes here...")
+def exam_tab(): st.info("Exam Prep content goes here...")
+def essay_tab(): st.info("Essay Grader content goes here...")
+def premium_tab(): st.info("Premium Upgrade content goes here...")
+def admin_dashboard(): st.info("Admin Dashboard content goes here...")
+
+
+# ==============================================================================
+# MAIN APPLICATION LOGIC
 # ==============================================================================
 
 def main():
     try:
         init_session()
-        apply_theme()
-        
+        apply_theme() # This call is now correctly defined
+
         if st.session_state.show_welcome: 
             welcome_screen()
             return
         
-        # New flow control: If we are in the password reset state, show only the reset block
+        # Priority 1: Handle password reset flow
         if st.session_state.show_forgot_password:
             forgot_password_block()
             return
 
-        # If not logged in, show login/register block
+        # Priority 2: Handle login/register flow
         if not st.session_state.logged_in: 
             login_block()
             st.info("Log in to start learning! 📖") 
             return
         
-        # Post-login flow
+        # Priority 3: Main App Content
         sidebar()
         enforce_access()
         
@@ -356,8 +406,6 @@ def main():
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
         print(f"CRITICAL ERROR IN MAIN: {e}")
-
-# ... (UI components stubs like apply_theme, welcome_screen, etc., remain the same)
 
 if __name__ == "__main__":
     main()

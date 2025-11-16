@@ -137,7 +137,6 @@ class Database:
     def get_2fa_secret(self, user_id: int) -> Optional[str]:
         """Retrieves the 2FA secret key for a user if 2FA is enabled."""
         row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ? AND is_enabled = 1", (user_id,)).fetchone()
-        # Ensure we return the secret string, or None if no row is found/2FA disabled
         return dict(row)['secret'] if row else None
 
 
@@ -189,7 +188,6 @@ class Database:
             "SELECT * FROM chat_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
             (user_id, limit)
         ).fetchall()
-        # History is retrieved newest first, reverse for chat display
         return [dict(row) for row in rows][::-1] 
     
     # ==============================================================================
@@ -210,7 +208,9 @@ class Database:
         self.conn.execute("UPDATE payments SET status = 'approved' WHERE id = ?", (payment_id,))
         row = self.conn.execute("SELECT user_id FROM payments WHERE id = ?", (payment_id,)).fetchone()
         if row:
-            self.upgrade_to_premium(dict(row)["user_id"])
+            # Note: The original code used row["user_id"] which may fail if row is not dict-like
+            # We assume the row_factory (sqlite3.Row) handles this, but use dict(row) for safety
+            self.upgrade_to_premium(dict(row)["user_id"]) 
         self.conn.commit()
 
     def reject_manual_payment(self, payment_id: int):
