@@ -126,21 +126,21 @@ class Database:
     def ban_user(self, user_id: int):
         self.conn.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,))
         self.conn.commit()
-    
-    def unban_user(self, user_id: int): # NEW
+
+    def unban_user(self, user_id: int):
         self.conn.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
         self.conn.commit()
 
     def upgrade_to_premium(self, user_id: int):
         expiry = (date.today() + timedelta(days=30)).isoformat()
         self.conn.execute(
-            "UPDATE users SET is_premium = 1, premium_expiry = ?, role = 'premium' WHERE user_id = ?", # Added role update
+            "UPDATE users SET is_premium = 1, premium_expiry = ? WHERE user_id = ?",
             (expiry, user_id)
         )
         self.conn.commit()
 
-    def downgrade_to_basic(self, user_id: int): # NEW
-        self.conn.execute("UPDATE users SET is_premium = 0, premium_expiry = NULL, role = 'user' WHERE user_id = ?", (user_id,)) # Added role update
+    def downgrade_to_basic(self, user_id: int):
+        self.conn.execute("UPDATE users SET is_premium = 0, premium_expiry = NULL WHERE user_id = ?", (user_id,))
         self.conn.commit()
 
     def check_premium_validity(self, user_id: int) -> bool:
@@ -159,17 +159,15 @@ class Database:
     def enable_2fa(self, user_id: int):
         secret = pyotp.random_base32()
         self.conn.execute(
-            "INSERT OR REPLACE INTO user_2fa (user_id, secret) VALUES (?, ?)",
+            # FIX: Using INSERT OR REPLACE to handle the case where a secret might exist but 2FA was disabled
+            "INSERT OR REPLACE INTO user_2fa (user_id, secret, enabled) VALUES (?, ?, 1)",
             (user_id, secret)
         )
         self.conn.commit()
-        return secret, self.get_2fa_qr(user_id)
+        return secret, self.get_2fa_qr_bytes(user_id, secret) # Return QR code bytes
 
-    def get_2fa_qr(self, user_id: int):
+    def get_2fa_qr_bytes(self, user_id: int, secret: str):
         user = self.get_user(user_id)
-        secret_row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
-        if not secret_row: return None
-        secret = secret_row["secret"]
         # 🇰🇪 Changed Issuer Name to PrepKe AI
         totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(name=user["email"], issuer_name="PrepKe AI") 
         qr = qrcode.make(totp_uri)
@@ -267,20 +265,22 @@ class Database:
     def update_streak(self, user_id: int) -> int:
         user = self.get_user(user_id)
         today = date.today()
+        # Ensure last_streak_date is not NULL before trying to parse
         last_date = date.fromisoformat(user["last_streak_date"]) if user["last_streak_date"] else None
         streak = user["streak"]
 
         if last_date == today - timedelta(days=1):
             streak += 1
         elif last_date != today:
-            streak = 1
+            streak = 1 # Reset if not consecutive and not today
 
         self.conn.execute(
             "UPDATE users SET streak = ?, last_streak_date = ? WHERE user_id = ?",
             (streak, today.isoformat(), user_id)
         )
-        # Daily streak bonus XP
-        self.add_xp(user_id, 20, spendable=False) 
+        # Daily streak bonus XP - Only award if streak was maintained/reset today
+        if last_date != today:
+             self.add_xp(user_id, 20, spendable=False) 
         self.conn.commit()
         return streak
 
