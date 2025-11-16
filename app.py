@@ -8,10 +8,30 @@ from database import Database
 from ai_engine import AIEngine
 from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
 
-# ────────────────────────────── CONFIG ──────────────────────────────
+# HIDE STREAMLIT UI (Git, Fork, 3 dots, Rerun, Settings, Print, About, Streamlit logo)
+hide_streamlit_style = """
+<style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .css-1d391kg {display: none;}  /* GitHub icon */
+    .css-1v0mbdj {display: none;}  /* Fork */
+    .css-1y0t9e2 {display: none;}  /* 3 dots */
+    .css-1q8ddts {display: none;}  /* Rerun */
+    .css-1v3fvcr {display: none;}  /* Settings */
+    .css-1x8cf1d {display: none;}  /* Print */
+    .css-1v3fvcr a {display: none;} /* About */
+    .css-18e3th9 {padding-top: 0rem; padding-left: 1rem; padding-right: 1rem;}
+    .css-1d391kg a {display: none;} /* Streamlit link */
+    .css-1v0mbdj a {display: none;}
+    .css-1y0t9e2 a {display: none;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 st.set_page_config(page_title="LearnFlow AI", page_icon="KE", layout="wide", initial_sidebar_state="expanded")
 
-# ────────────────────────────── INIT DB & AI ──────────────────────────────
+# INIT
 try:
     db = Database()
     ai_engine = AIEngine(st.secrets.get("GEMINI_API_KEY", ""))
@@ -19,25 +39,22 @@ except Exception as e:
     st.error(f"INIT FAILED: {e}")
     st.stop()
 
-# ────────────────────────────── SESSION STATE ──────────────────────────────
+# SESSION
 def init_session():
     defaults = {
         "logged_in": False, "user_id": None, "is_admin": False, "user": None,
         "show_welcome": True, "chat_history": [], "current_subject": "Mathematics",
         "pdf_text": "", "current_tab": "Chat Tutor",
-        "exam_questions": None, "user_answers": {}
+        "exam_questions": None, "user_answers": {}, "exam_submitted": False
     }
     for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+        if k not in st.session_state: st.session_state[k] = v
 
-# ────────────────────────────── USER TIER LOGIC ──────────────────────────────
+# TIER
 def get_user_tier():
-    if st.session_state.is_admin:
-        return "admin"
+    if st.session_state.is_admin: return "admin"
     user = db.get_user(st.session_state.user_id)
-    if not user:
-        return "basic"
+    if not user: return "basic"
     if user.get("is_premium") and db.check_premium_validity(st.session_state.user_id):
         return "premium"
     return "basic"
@@ -45,18 +62,32 @@ def get_user_tier():
 def enforce_access():
     tier = get_user_tier()
     tab = st.session_state.current_tab
+
+    # ADMIN HAS FULL ACCESS
+    if tier == "admin":
+        return
+
     if tier == "basic" and tab not in ["Chat Tutor", "Settings"]:
         st.warning("Upgrade to **Premium** to access this feature.")
         st.stop()
+
     if tier == "basic":
         if tab == "Chat Tutor" and not db.can_ask_question(st.session_state.user_id):
-            st.error("Daily limit: 10 questions. Upgrade to Premium!")
+            remaining = 10 - db.get_daily_question_count(st.session_state.user_id)
+            if remaining <= 0:
+                st.error("You've used your **10 questions** today. Upgrade to Premium for unlimited!")
+            else:
+                st.warning(f"You have **{remaining} questions** left today.")
             st.stop()
         if tab == "PDF Q&A" and not db.can_upload_pdf(st.session_state.user_id):
-            st.error("Daily limit: 3 PDF uploads. Upgrade to Premium!")
+            remaining = 3 - db.get_daily_pdf_count(st.session_state.user_id)
+            if remaining <= 0:
+                st.error("You've used your **3 PDF uploads** today. Upgrade to Premium!")
+            else:
+                st.warning(f"You have **{remaining} PDF uploads** left today.")
             st.stop()
 
-# ────────────────────────────── UI COMPONENTS ──────────────────────────────
+# UI
 def welcome_screen():
     st.markdown("""
     <div style="background:linear-gradient(135deg,#009E60,#FFD700);padding:60px;border-radius:20px;text-align:center;color:white">
@@ -72,8 +103,7 @@ def welcome_screen():
             st.rerun()
 
 def login_block():
-    if st.session_state.logged_in:
-        return
+    if st.session_state.logged_in: return
 
     st.markdown("### Login / Sign Up")
     choice = st.radio("Action", ["Login", "Sign Up"], horizontal=True, label_visibility="collapsed")
@@ -82,11 +112,10 @@ def login_block():
     totp = st.text_input("2FA Code (if enabled)", key="totp") if choice == "Login" else ""
 
     if st.button(choice, type="primary"):
-        if len(pwd) < 6:
-            st.error("Password must be at least 6 characters.")
-            return
-
         if choice == "Sign Up":
+            if len(pwd) < 6:
+                st.error("Password must be **at least 6 characters**.")
+                return
             uid = db.create_user(email, pwd)
             if uid:
                 st.success("Account created! Please log in.")
@@ -107,13 +136,11 @@ def login_block():
             st.error("Invalid email or password.")
             return
 
-        # 2FA (safe)
         try:
             if db.is_2fa_enabled(user["user_id"]) and not db.verify_2fa_code(user["user_id"], totp):
                 st.error("Invalid 2FA code.")
                 return
-        except AttributeError:
-            pass  # 2FA not implemented
+        except: pass
 
         db.update_user_activity(user["user_id"])
         st.session_state.update({
@@ -131,198 +158,171 @@ def sidebar():
         tier = get_user_tier()
         st.markdown(f"**Tier:** `{tier.upper()}`")
         if tier == "basic":
-            st.warning("**Basic Plan:**\n- 10 questions/day\n- 3 PDFs/day")
+            q_left = 10 - db.get_daily_question_count(st.session_state.user_id)
+            p_left = 3 - db.get_daily_pdf_count(st.session_state.user_id)
+            st.warning(f"**Basic Plan:**\n- {q_left} questions left\n- {p_left} PDFs left")
 
         user = db.get_user(st.session_state.user_id) or {}
         streak = db.update_streak(st.session_state.user_id)
         st.markdown(f"**Streak:** {streak} days")
 
-        st.session_state.current_subject = st.selectbox(
-            "Subject", list(SUBJECT_PROMPTS.keys()), key="sidebar_subject"
-        )
+        st.session_state.current_subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()), key="subj")
 
-        # Badges
         badges_raw = user.get("badges", "[]")
-        try:
-            badges = json.loads(badges_raw) if isinstance(badges_raw, str) else badges_raw
-        except:
-            badges = []
+        try: badges = json.loads(badges_raw) if isinstance(badges_raw, str) else badges_raw
+        except: badges = []
         if badges:
             st.markdown("### Badges")
-            for b in badges[:5]:
-                st.markdown(f"{BADGES.get(b, b)}")
+            for b in badges[:5]: st.markdown(f"{BADGES.get(b, b)}")
 
-        # Leaderboard
         st.markdown("### Leaderboard")
         lb = db.get_leaderboard("exam")[:3]
-        for i, entry in enumerate(lb):
-            st.markdown(f"**{i+1}.** {entry['email']} – {entry['score']:.0f} pts")
+        for i, e in enumerate(lb): st.markdown(f"**{i+1}.** {e['email']} – {e['score']:.0f}")
 
-# ────────────────────────────── TAB FUNCTIONS (ALL DEFINED) ──────────────────────────────
+# TABS
 def chat_tab():
     st.session_state.current_tab = "Chat Tutor"
     enforce_access()
-
     for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
+        with st.chat_message(msg["role"]): st.markdown(msg["content"])
     if prompt := st.chat_input("Ask anything..."):
         if not db.can_ask_question(st.session_state.user_id):
-            st.error("You've used your 10 questions today. Upgrade to Premium!")
+            st.error("Daily limit reached.")
             return
-
         st.session_state.chat_history.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
+        with st.chat_message("user"): st.markdown(prompt)
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 context = st.session_state.pdf_text[-2000:] if st.session_state.pdf_text else ""
-                # FIXED: No double comma
                 enhanced_prompt = get_enhanced_prompt(st.session_state.current_subject, prompt, context)
-                response = ai_engine.generate_response(prompt, enhanced_prompt)
-                st.markdown(response)
-                st.session_state.chat_history.append({"role": "assistant", "content": response})
-
-        db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, prompt, response)
+                resp = ai_engine.generate_response(prompt, enhanced_prompt)
+                st.markdown(resp)
+                st.session_state.chat_history.append({"role": "assistant", "content": resp})
+        db.add_chat_history(st.session_state.user_id, st.session_state.current_subject, prompt, resp)
         db.add_score(st.session_state.user_id, "chat", 10)
 
 def pdf_tab():
     st.session_state.current_tab = "PDF Q&A"
     enforce_access()
-
     if not db.can_upload_pdf(st.session_state.user_id):
-        st.error("**Daily limit:** 3 PDF uploads. Upgrade to Premium!")
+        remaining = 3 - db.get_daily_pdf_count(st.session_state.user_id)
+        if remaining <= 0:
+            st.error("You've used your **3 PDF uploads** today. Upgrade to Premium!")
+        else:
+            st.warning(f"You have **{remaining} PDF uploads** left today.")
         return
-
-    uploaded_file = st.file_uploader("Upload PDF", type="pdf", key="pdf_uploader")
-
-    if uploaded_file and not st.session_state.pdf_text:
-        with st.spinner("Extracting text from PDF..."):
-            text = ai_engine.extract_text_from_pdf(uploaded_file.read())
+    file = st.file_uploader("Upload PDF", type="pdf")
+    if file and not st.session_state.pdf_text:
+        with st.spinner("Reading..."):
+            text = ai_engine.extract_text_from_pdf(file.read())
             st.session_state.pdf_text = text
-            st.success("PDF loaded! Ask questions below.")
-        st.text_area("Preview", text[:2000] + ("..." if len(text) > 2000 else ""), height=150, disabled=True)
-
+            st.success("PDF loaded!")
     if st.session_state.pdf_text:
-        if q := st.chat_input("Ask about the PDF..."):
-            with st.chat_message("user"):
-                st.markdown(q)
+        if q := st.chat_input("Ask about PDF..."):
+            with st.chat_message("user"): st.markdown(q)
             with st.chat_message("assistant"):
                 with st.spinner("Answering..."):
-                    resp = ai_engine.generate_response(
-                        q,
-                        f"Based on this document:\n{st.session_state.pdf_text[-3000:]}"
-                    )
+                    resp = ai_engine.generate_response(q, f"Text:\n{st.session_state.pdf_text[-3000:]}")
                     st.markdown(resp)
 
 def exam_tab():
     st.session_state.current_tab = "Exam Prep"
     enforce_access()
 
-    if st.button("New Exam", key="new_exam_btn"):
-        st.session_state.exam_questions = None
-        st.session_state.user_answers = {}
-        st.rerun()
+    if st.session_state.exam_submitted:
+        if st.button("New Exam", key="new_exam_after"):
+            st.session_state.exam_questions = None
+            st.session_state.user_answers = {}
+            st.session_state.exam_submitted = False
+            st.rerun()
 
     if not st.session_state.exam_questions:
-        exam_input = st.text_input(
-            "Exam Type (e.g., KCSE, Python Programming)",
-            placeholder="KCSE",
-            key="exam_type_input"
-        )
-        subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()), key="exam_subject")
-        num = st.slider("Number of Questions", 1, 100, 10, key="exam_num")
-
-        if st.button("Generate Exam", key="generate_exam"):
-            exam_type = "Python Programming" if "python" in exam_input.lower() else exam_input
-            with st.spinner("Generating exam..."):
-                st.session_state.exam_questions = ai_engine.generate_exam_questions(subject, exam_type, num)
-                st.session_state.user_answers = {}
+        exam_type = st.selectbox("Exam Type", list(EXAM_TYPES.keys()), key="exam_type_select")
+        subject = st.selectbox("Subject", EXAM_TYPES[exam_type]["subjects"], key="exam_subject")
+        num = st.slider("Questions", 1, 100, 10)
+        if st.button("Generate Exam"):
+            st.session_state.exam_questions = ai_engine.generate_exam_questions(subject, exam_type, num)
+            st.session_state.user_answers = {}
             st.rerun()
     else:
-        st.markdown("### Answer All Questions Below")
+        st.markdown("### Answer All Questions")
         for i, q in enumerate(st.session_state.exam_questions):
             st.markdown(f"**Q{i+1}:** {q['question']}")
-            st.session_state.user_answers[i] = st.radio(
-                "Select answer",
-                q['options'],
-                key=f"exam_radio_{i}"
-            )
-
+            st.session_state.user_answers[i] = st.radio("Choose", q['options'], key=f"ans_{i}")
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Submit All Answers", type="primary", key="submit_exam"):
+            if st.button("Submit All", type="primary"):
                 res = ai_engine.grade_mcq(st.session_state.exam_questions, st.session_state.user_answers)
                 score = res["percentage"]
                 db.add_score(st.session_state.user_id, "exam", score)
-                if score >= 90:
-                    db.add_badge(st.session_state.user_id, "exam_master")
-                    st.balloons()
-
-                st.markdown(f"## Final Score: **{score}%**")
-                st.markdown("### Detailed Feedback")
+                if score >= 90: db.add_badge(st.session_state.user_id, "exam_master")
+                st.markdown(f"## Score: {score}%")
                 for r in res["results"]:
                     icon = "Correct" if r["is_correct"] else "Wrong"
-                    st.markdown(f"- {icon} **{r['question']}**")
-                    st.markdown(f"   Your answer: `{r['user_answer']}`")
-                    st.markdown(f"   Correct: `{r['correct_answer']}`")
-                    if not r["is_correct"]:
-                        st.markdown(f"   Feedback: {r.get('feedback', 'No feedback')}")
-                st.session_state.exam_questions = None
+                    st.markdown(f"- {icon} **{r['question']}**  \n  Your: `{r['user_answer']}`  \n  Correct: `{r['correct_answer']}`")
+                st.session_state.exam_submitted = True
                 st.rerun()
         with col2:
-            if st.button("Back to Menu", key="back_to_exam_menu"):
+            if st.button("Cancel"):
                 st.session_state.exam_questions = None
                 st.rerun()
 
 def essay_tab():
     st.session_state.current_tab = "Essay Grader"
     enforce_access()
-
-    essay = st.text_area("Paste your essay here", height=250, key="essay_input")
-    if st.button("Grade Essay", key="grade_essay") and essay.strip():
-        with st.spinner("Grading your essay..."):
-            result = ai_engine.grade_essay(essay, "Kenyan curriculum")
-            score = result["score"]
-            db.add_score(st.session_state.user_id, "essay", score)
-            if score >= 90:
-                db.add_badge(st.session_state.user_id, "essay_expert")
-                st.balloons()
-            st.markdown(f"### Score: **{score}/100**")
-            st.markdown(result["feedback"])
+    essay = st.text_area("Essay", height=200)
+    if st.button("Grade") and essay.strip():
+        res = ai_engine.grade_essay(essay, "Kenyan curriculum")
+        score = res["score"]
+        db.add_score(st.session_state.user_id, "essay", score)
+        if score >= 90: db.add_badge(st.session_state.user_id, "essay_expert")
+        st.markdown(f"**Score: {score}/100** – {res['feedback']}")
 
 def settings_tab():
     st.session_state.current_tab = "Settings"
     st.markdown("### Settings")
-    theme = st.selectbox("Theme", ["Light", "Dark"], key="theme_select")
-    font = st.selectbox("Font", ["Sans-serif", "Serif"], key="font_select")
-    if st.button("Save Settings"):
-        st.success("Settings saved successfully!")
+
+    # Theme
+    theme = st.selectbox("Theme", ["Light", "Dark"], key="theme")
+
+    # Font
+    fonts = ["Sans-serif", "Serif", "Monospace", "Arial", "Courier New", "Georgia", "Times New Roman", "Verdana"]
+    st.selectbox("Font", fonts, key="font")
+
+    # 2FA
+    st.markdown("### 2FA")
+    if st.button("Enable 2FA"):
+        secret = db.enable_2fa(st.session_state.user_id)
+        qr = db.get_2fa_qr(st.session_state.user_id)
+        st.image(qr)
+        st.code(secret)
+    if db.is_2fa_enabled(st.session_state.user_id):
+        if st.button("Disable 2FA"):
+            db.disable_2fa(st.session_state.user_id)
+            st.success("2FA Disabled")
+
+    # History
+    st.markdown("### Chat History")
+    history = db.get_chat_history(st.session_state.user_id)
+    for h in history[-10:]:
+        st.markdown(f"**{h['subject']}**: {h['user_query'][:50]}...")
 
 def premium_tab():
     st.session_state.current_tab = "Premium"
     if st.session_state.is_admin:
-        st.success("You have **full access** as Admin.")
+        st.success("Admin has full access.")
         return
-
     user = db.get_user(st.session_state.user_id)
     discount = user.get("discount", 0) if user else 0
     price = 500 * (1 - discount)
-    st.markdown(f"### Upgrade to Premium – **KES {price:.0f}/month**")
-    if discount > 0:
-        st.success("20% Leaderboard Champion Discount Applied!")
-
-    st.info("Send payment to M-Pesa: `0701617120`")
-    phone = st.text_input("Your Phone Number", key="prem_phone")
-    code = st.text_input("M-Pesa Code", key="prem_code")
-    if st.button("Submit Payment", key="prem_submit"):
-        if phone and code:
-            db.add_manual_payment(st.session_state.user_id, phone, code)
-            st.success("Payment submitted! Awaiting approval.")
-        else:
-            st.error("Please fill both fields.")
+    st.markdown(f"### Price: **KES {price:.0f}**")
+    if discount: st.success("20% Discount!")
+    st.info("Send to M-Pesa: `0701617120`")
+    phone = st.text_input("Phone", key="pphone")
+    code = st.text_input("Code", key="pcode")
+    if st.button("Submit"):
+        db.add_manual_payment(st.session_state.user_id, phone, code)
+        st.success("Submitted!")
 
 def admin_dashboard():
     st.session_state.current_tab = "Admin"
@@ -331,51 +331,52 @@ def admin_dashboard():
         return
 
     st.markdown("## Admin Control Centre")
-    st.write("Only **1 admin** exists: `kingmumo15@gmail.com`")
 
-    if st.button("Apply Monthly Discounts"):
-        db.apply_monthly_discount()
-        st.success("20% discount applied to leaderboard champions!")
+    # Users Table
+    users = db.get_all_users()
+    df = pd.DataFrame(users)
+    edited = st.data_editor(df, num_rows="dynamic")
 
+    # Ban / Upgrade
+    for idx, row in edited.iterrows():
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button(f"Ban {row['email']}", key=f"ban_{row['user_id']}"):
+                db.ban_user(row['user_id'])
+        with col2:
+            if st.button(f"Upgrade {row['email']}", key=f"up_{row['user_id']}"):
+                db.upgrade_to_premium(row['user_id'])
+        with col3:
+            if st.button(f"Downgrade {row['email']}", key=f"down_{row['user_id']}"):
+                db.downgrade_to_basic(row['user_id'])
+
+    # Pending Payments
+    st.markdown("### Pending Payments")
     payments = db.get_pending_payments()
     if payments:
-        st.markdown("### Pending Payments")
         for p in payments:
-            c1, c2, c3 = st.columns([3, 1, 1])
-            with c1:
-                st.write(f"**{p['phone']}** – `{p['mpesa_code']}`")
-            with c2:
-                if st.button("Approve", key=f"approve_{p['id']}"):
+            c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
+            with c1: st.write(f"**Phone:** {p['phone']}")
+            with c2: st.write(f"**Code:** `{p['mpesa_code']}`")
+            with c3:
+                if st.button("Approve", key=f"a{p['id']}"):
                     db.approve_manual_payment(p['id'])
                     st.rerun()
-            with c3:
-                if st.button("Reject", key=f"reject_{p['id']}"):
+            with c4:
+                if st.button("Reject", key=f"r{p['id']}"):
                     db.reject_manual_payment(p['id'])
                     st.rerun()
 
-    users = db.get_all_users()
-    if users:
-        df = pd.DataFrame(users)[["email", "name", "role", "is_premium"]]
-        st.dataframe(df)
-
-# ────────────────────────────── MAIN APP ──────────────────────────────
+# MAIN
 def main():
     try:
         init_session()
-
-        if st.session_state.show_welcome:
-            welcome_screen()
-            return
-
+        if st.session_state.show_welcome: welcome_screen(); return
         login_block()
-        if not st.session_state.logged_in:
-            st.info("Please log in to continue.")
-            return
-
+        if not st.session_state.logged_in: st.info("Log in."); return
         sidebar()
         enforce_access()
 
-        # Define tabs
         base_tabs = ["Chat Tutor", "Settings"]
         premium_tabs = ["PDF Q&A", "Exam Prep", "Essay Grader"]
         tabs = base_tabs.copy()
@@ -387,8 +388,7 @@ def main():
         if st.session_state.is_admin:
             tabs.append("Admin Control Centre")
 
-        # Render tabs
-        tab_objects = st.tabs(tabs)
+        tab_objs = st.tabs(tabs)
         tab_map = {
             "Chat Tutor": chat_tab,
             "Settings": settings_tab,
@@ -398,14 +398,11 @@ def main():
             "Premium": premium_tab,
             "Admin Control Centre": admin_dashboard
         }
-
-        for tab_name, tab_obj in zip(tabs, tab_objects):
+        for tab_name, tab_obj in zip(tabs, tab_objs):
             with tab_obj:
                 tab_map[tab_name]()
-
     except Exception as e:
-        st.error(f"APP CRASHED: {e}")
-        st.write("Please refresh or contact support.")
+        st.error(f"CRASH: {e}")
 
 if __name__ == "__main__":
     main()

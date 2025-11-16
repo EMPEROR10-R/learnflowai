@@ -5,6 +5,8 @@ import json
 import uuid
 from datetime import date, timedelta, datetime
 import pyotp
+import qrcode
+from io import BytesIO
 from typing import Optional, Dict, List
 
 DB_PATH = "users.db"
@@ -159,8 +161,10 @@ class Database:
         last, streak = row["last_streak_date"], row["streak_days"]
         today = date.today().isoformat()
         if last == today: return streak
-        elif last == (date.today() - timedelta(days=1)).isoformat(): streak += 1
-        else: streak = 1
+        elif last == (date.today() - timedelta(days=1)).isoformat():
+            streak += 1
+        else:
+            streak = 1
         c.execute("UPDATE users SET streak_days = ?, last_streak_date = ? WHERE user_id = ?", (streak, today, user_id))
         self.commit()
         return streak
@@ -183,7 +187,7 @@ class Database:
         user = self.get_user(user_id)
         return user and user["role"] == "admin"
 
-    # 2FA METHODS (SAFE)
+    # 2FA METHODS
     def is_2fa_enabled(self, user_id):
         try:
             c = self._c()
@@ -205,7 +209,42 @@ class Database:
         except:
             return False
 
+    def enable_2fa(self, user_id):
+        secret = pyotp.random_base32()
+        c = self._c()
+        c.execute("UPDATE users SET twofa_secret = ? WHERE user_id = ?", (secret, user_id))
+        self.commit()
+        return secret
+
+    def disable_2fa(self, user_id):
+        c = self._c()
+        c.execute("UPDATE users SET twofa_secret = NULL WHERE user_id = ?", (user_id,))
+        self.commit()
+
+    def get_2fa_qr(self, user_id):
+        user = self.get_user(user_id)
+        if not user or not user.get("twofa_secret"):
+            return None
+        totp = pyotp.TOTP(user["twofa_secret"])
+        uri = totp.provisioning_uri(name=user["email"], issuer_name="LearnFlow AI")
+        qr = qrcode.make(uri)
+        buffered = BytesIO()
+        qr.save(buffered, format="PNG")
+        return buffered.getvalue()
+
     # LIMITS
+    def get_daily_question_count(self, user_id):
+        today = date.today().isoformat()
+        c = self._c()
+        c.execute("SELECT daily_questions, last_question_date FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        if not row:
+            return 0
+        count, last = row["daily_questions"], row["last_question_date"]
+        if last != today:
+            return 0
+        return count
+
     def can_ask_question(self, user_id):
         if self.is_admin(user_id) or (self.check_premium(user_id) and self.check_premium_validity(user_id)):
             return True
@@ -213,7 +252,8 @@ class Database:
         c = self._c()
         c.execute("SELECT daily_questions, last_question_date FROM users WHERE user_id = ?", (user_id,))
         row = c.fetchone()
-        if not row: return False
+        if not row:
+            return True
         count, last = row["daily_questions"], row["last_question_date"]
         if last != today:
             count = 0
@@ -222,6 +262,18 @@ class Database:
         self.commit()
         return count <= 10
 
+    def get_daily_pdf_count(self, user_id):
+        today = date.today().isoformat()
+        c = self._c()
+        c.execute("SELECT daily_pdf_uploads, last_pdf_date FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        if not row:
+            return 0
+        count, last = row["daily_pdf_uploads"], row["last_pdf_date"]
+        if last != today:
+            return 0
+        return count
+
     def can_upload_pdf(self, user_id):
         if self.is_admin(user_id) or (self.check_premium(user_id) and self.check_premium_validity(user_id)):
             return True
@@ -229,7 +281,8 @@ class Database:
         c = self._c()
         c.execute("SELECT daily_pdf_uploads, last_pdf_date FROM users WHERE user_id = ?", (user_id,))
         row = c.fetchone()
-        if not row: return False
+        if not row:
+            return True
         count, last = row["daily_pdf_uploads"], row["last_pdf_date"]
         if last != today:
             count = 0
@@ -317,12 +370,32 @@ class Database:
         c.execute("SELECT user_id, email, name, role, is_premium FROM users")
         return [dict(row) for row in c.fetchall()]
 
-    # CHAT & SCORES
+    def ban_user(self, user_id):
+        c = self._c()
+        c.execute("UPDATE users SET role = 'banned' WHERE user_id = ?", (user_id,))
+        self.commit()
+
+    def upgrade_to_premium(self, user_id):
+        c = self._c()
+        c.execute("UPDATE users SET is_premium = 1 WHERE user_id = ?", (user_id,))
+        self.commit()
+
+    def downgrade_to_basic(self, user_id):
+        c = self._c()
+        c.execute("UPDATE users SET is_premium = 0 WHERE user_id = ?", (user_id,))
+        self.commit()
+
+    # CHAT & HISTORY
     def add_chat_history(self, user_id, subject, query, response):
         c = self._c()
         c.execute("INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?,?,?,?)",
                   (user_id, subject, query, response))
         self.commit()
+
+    def get_chat_history(self, user_id):
+        c = self._c()
+        c.execute("SELECT * FROM chat_history WHERE user_id = ? ORDER BY timestamp DESC", (user_id,))
+        return [dict(row) for row in c.fetchall()]
 
     def add_score(self, user_id, category, score):
         c = self._c()
