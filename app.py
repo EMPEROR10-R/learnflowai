@@ -215,5 +215,3 @@ for name, tab in zip(tabs, st.tabs(tabs)):
             mapping.get(name, lambda: st.info('Unknown'))()
         except Exception as e:
             st.error(f'Tab {name} failed but others continue: {e}')
-
-# End of app_fixed_v2.py

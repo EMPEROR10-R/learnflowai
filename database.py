@@ -1,8 +1,4 @@
-# database_fixed.py
-# Patch of database.py to make chat_history writes robust and avoid NOT NULL constraint errors
-# - add_chat_history tries the canonical function, and falls back to creating any missing columns
-# - helper to ensure both user_query and user_message exist as nullable columns
-
+# database.py
 import sqlite3
 import bcrypt
 import json
@@ -13,14 +9,16 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 
 class Database:
-    def __init__(self, db_path: str = "prepke.db"):
+    def __init__(self, db_path: str = "prepke.db"): # Changed DB file name
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        # Ensures cross-platform compatibility for Streamlit concurrency
+        self.conn = sqlite3.connect(db_path, check_same_thread=False) 
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
 
     def _create_tables(self):
         self.conn.executescript("""
+        -- Users Table
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
@@ -43,138 +41,214 @@ class Database:
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- 2FA Table
         CREATE TABLE IF NOT EXISTS user_2fa (
             user_id INTEGER PRIMARY KEY,
             secret TEXT NOT NULL,
-            enabled INTEGER DEFAULT 1,
-            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            is_enabled INTEGER DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
         );
 
+        -- Chat History Table (Includes robust columns for different models)
         CREATE TABLE IF NOT EXISTS chat_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            subject TEXT,
+            user_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
             user_query TEXT,
-            user_message TEXT,
             ai_response TEXT,
+            user_message TEXT, -- alternate column name
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
         );
 
-        CREATE TABLE IF NOT EXISTS scores (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            category TEXT,
-            score REAL,
-            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
-        );
-
+        -- Payments Table for Manual Review
         CREATE TABLE IF NOT EXISTS payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            phone TEXT,
-            mpesa_code TEXT,
-            status TEXT DEFAULT 'pending',
+            user_id INTEGER NOT NULL,
+            phone TEXT NOT NULL,
+            mpesa_code TEXT NOT NULL,
+            status TEXT DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
         );
+        
+        -- Scores Table for Quizzes and Essays (NEW)
+        CREATE TABLE IF NOT EXISTS scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            category TEXT NOT NULL, -- e.g., 'Math Quiz: Algebra', 'Essay: The Water Cycle'
+            score INTEGER NOT NULL,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        );
+        """).executescript("""
+        -- Ensure all necessary columns exist and are nullable for robust writes
+        ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS user_message TEXT;
+        ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS user_query TEXT;
         """)
         self.conn.commit()
 
-    # user methods (create/get/update) kept minimal here for brevity
-    def create_user(self, email: str, password: str) -> Optional[int]:
-        try:
-            hash_pwd = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-            cursor = self.conn.execute(
-                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
-                (email.lower(), hash_pwd)
-            )
-            self.conn.commit()
-            return cursor.lastrowid
-        except sqlite3.IntegrityError:
-            return None
+    # ==============================================================================
+    # USER AUTHENTICATION & MANAGEMENT
+    # ==============================================================================
+
+    def register_user(self, email: str, password: str, name: str, role: str = 'user'):
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        self.conn.execute(
+            "INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)", 
+            (email, hashed, name, role)
+        )
+        self.conn.commit()
+
+    def authenticate_user(self, email: str, password: str) -> Optional[Dict]:
+        row = self.conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        if row and bcrypt.checkpw(password.encode('utf-8'), row['password_hash']):
+            return dict(row)
+        return None
 
     def get_user(self, user_id: int) -> Optional[Dict]:
         row = self.conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         return dict(row) if row else None
 
-    # ... other methods omitted for brevity; keep same names as app expects
-
-    def add_chat_history(self, user_id: int, subject: str, user_query: str, ai_response: str):
-        # Attempt to insert into preferred columns; if columns missing or constraint error, alter table to add columns
-        cur = self.conn.cursor()
-        try:
-            cur.execute("INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?, ?, ?, ?)", (user_id, subject, user_query, ai_response))
-            self.conn.commit(); return
-        except sqlite3.IntegrityError:
-            self.conn.rollback()
-        except sqlite3.OperationalError:
-            self.conn.rollback()
-        # If we reach here, try to ensure user_message column exists and insert
-        try:
-            cur.execute("ALTER TABLE chat_history ADD COLUMN user_message TEXT")
-        except sqlite3.OperationalError:
-            # column probably exists
-            pass
-        try:
-            cur.execute("INSERT INTO chat_history (user_id, subject, user_message, ai_response) VALUES (?, ?, ?, ?)", (user_id, subject, user_query, ai_response))
-            self.conn.commit(); return
-        except Exception:
-            self.conn.rollback()
-        # Final fallback: insert whatever columns are present
-        cols = [c['name'] for c in self.conn.execute("PRAGMA table_info(chat_history)").fetchall()]
-        insert_cols = []
-        vals = []
-        if 'user_id' in cols: insert_cols.append('user_id'); vals.append(user_id)
-        if 'subject' in cols: insert_cols.append('subject'); vals.append(subject)
-        if 'user_query' in cols: insert_cols.append('user_query'); vals.append(user_query)
-        elif 'user_message' in cols: insert_cols.append('user_message'); vals.append(user_query)
-        if 'ai_response' in cols: insert_cols.append('ai_response'); vals.append(ai_response)
-        if not insert_cols:
-            return
-        q = f"INSERT INTO chat_history ({', '.join(insert_cols)}) VALUES ({', '.join(['?']*len(insert_cols))})"
-        cur.execute(q, tuple(vals)); self.conn.commit()
-
-    # Minimal implementations of functions used by app
-    def is_2fa_enabled(self, user_id: int) -> bool:
-        row = self.conn.execute("SELECT 1 FROM user_2fa WHERE user_id = ? AND enabled = 1", (user_id,)).fetchone()
-        return bool(row)
-    def enable_2fa(self, user_id: int):
-        secret = pyotp.random_base32()
-        self.conn.execute("INSERT OR REPLACE INTO user_2fa (user_id, secret, enabled) VALUES (?, ?, 1)", (user_id, secret))
+    def upgrade_to_premium(self, user_id: int):
+        expiry = (datetime.now() + timedelta(days=30)).isoformat()
+        self.conn.execute(
+            "UPDATE users SET is_premium = 1, premium_expiry = ? WHERE user_id = ?",
+            (expiry, user_id)
+        )
         self.conn.commit()
-        # return QR bytes
-        totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(name=self.get_user(user_id)['email'], issuer_name='PrepKe')
-        qr = qrcode.make(totp_uri)
-        buf = io.BytesIO(); qr.save(buf,'PNG')
-        return secret, buf.getvalue()
-    def verify_2fa_code(self, user_id: int, code: str) -> bool:
-        row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
-        if not row: return False
-        totp = pyotp.TOTP(row[0]); return totp.verify(code)
 
-    # XP helpers
-    def add_xp(self, user_id: int, points: int, spendable: bool = False):
-        if spendable:
-            self.conn.execute("UPDATE users SET spendable_xp = spendable_xp + ? WHERE user_id = ?", (points, user_id))
-        else:
-            self.conn.execute("UPDATE users SET total_xp = total_xp + ?, spendable_xp = spendable_xp + ? WHERE user_id = ?", (points, points, user_id))
+    # ==============================================================================
+    # CHAT & DAILY LIMITS
+    # ==============================================================================
+
+    def add_chat_history(self, user_id: int, subject: str, user_msg: str, ai_msg: str):
+        # Tries to insert into the canonical columns (user_query, ai_response)
+        # If the columns don't exist, the `app.py` fallback will handle it.
+        self.conn.execute(
+            "INSERT INTO chat_history (user_id, subject, user_query, ai_response) VALUES (?, ?, ?, ?)",
+            (user_id, subject, user_msg, ai_msg)
+        )
         self.conn.commit()
 
     def increment_daily_pdf(self, user_id: int):
         self.conn.execute("UPDATE users SET daily_pdfs = daily_pdfs + 1 WHERE user_id = ?", (user_id,))
         self.conn.commit()
 
-    def get_user_scores(self, user_id: int) -> List[Dict]:
-        rows = self.conn.execute("SELECT category, score, timestamp FROM scores WHERE user_id = ? ORDER BY timestamp DESC LIMIT 50", (user_id,)).fetchall()
-        return [dict(r) for r in rows]
+    # ==============================================================================
+    # 2FA
+    # ==============================================================================
+
+    def enable_2fa(self, user_id: int) -> tuple[str, str]:
+        # Generate new secret
+        secret = pyotp.random_base32()
+        
+        # Check if user_2fa entry exists
+        row = self.conn.execute("SELECT * FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
+        
+        if row:
+            # Update existing entry
+            self.conn.execute(
+                "UPDATE user_2fa SET secret = ?, is_enabled = 0 WHERE user_id = ?",
+                (secret, user_id)
+            )
+        else:
+            # Insert new entry
+            self.conn.execute(
+                "INSERT INTO user_2fa (user_id, secret, is_enabled) VALUES (?, ?, 0)",
+                (user_id, secret)
+            )
+            
+        # Also update user table
+        self.conn.execute("UPDATE users SET has_2fa = 1 WHERE user_id = ?", (user_id,))
+
+        self.conn.commit()
+        return secret, f"otpauth://totp/PrepKe:{user_id}?secret={secret}&issuer=PrepKe"
+        
+    def disable_2fa(self, user_id: int):
+        self.conn.execute("UPDATE user_2fa SET is_enabled = 0 WHERE user_id = ?", (user_id,))
+        self.conn.execute("UPDATE users SET has_2fa = 0 WHERE user_id = ?", (user_id,))
+        self.conn.commit()
+
+    def is_2fa_enabled(self, user_id: int) -> bool:
+        row = self.conn.execute("SELECT is_enabled FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
+        return row and row['is_enabled'] == 1
+
+    def verify_2fa_code(self, user_id: int, code: str) -> bool:
+        row = self.conn.execute("SELECT secret FROM user_2fa WHERE user_id = ?", (user_id,)).fetchone()
+        if not row: return False
+        
+        secret = row[0]
+        totp = pyotp.TOTP(secret)
+        
+        if totp.verify(code):
+            # If successfully verified, enable 2FA officially
+            self.conn.execute("UPDATE user_2fa SET is_enabled = 1 WHERE user_id = ?", (user_id,))
+            self.conn.commit()
+            return True
+        return False
+
+    # ==============================================================================
+    # XP & SCORE TRACKING
+    # ==============================================================================
+
+    def add_xp(self, user_id: int, points: int):
+        # Update both total and spendable XP
+        self.conn.execute(
+            "UPDATE users SET total_xp = total_xp + ?, spendable_xp = spendable_xp + ? WHERE user_id = ?", 
+            (points, points, user_id)
+        )
+        self.conn.commit()
 
     def get_xp_leaderboard(self):
-        rows = self.conn.execute("SELECT email, total_xp, (SELECT COUNT(*) + 1 FROM users u2 WHERE u2.total_xp > u1.total_xp AND u2.is_banned = 0) as rank FROM users u1 WHERE is_banned = 0 ORDER BY total_xp DESC LIMIT 10").fetchall()
-        return [dict(r) for r in rows]
+        rows = self.conn.execute(
+            "SELECT email, total_xp, (SELECT COUNT(*) + 1 FROM users u2 WHERE u2.total_xp > u1.total_xp AND u2.is_banned = 0) as rank FROM users u1 WHERE u1.is_banned = 0 ORDER BY total_xp DESC LIMIT 10"
+        ).fetchall()
+        return [dict(row) for row in rows]
+    
+    def add_score(self, user_id: int, category: str, score: int):
+        """Adds a quiz or essay score to the scores table."""
+        self.conn.execute(
+            "INSERT INTO scores (user_id, category, score) VALUES (?, ?, ?)",
+            (user_id, category, score)
+        )
+        self.conn.commit()
+        
+    def get_user_scores(self, user_id: int) -> List[Dict]:
+        """Fetches the 10 most recent scores for the user."""
+        rows = self.conn.execute(
+            "SELECT category, score, timestamp FROM scores WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10",
+            (user_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
 
-    def get_pending_payments(self):
-        return [dict(r) for r in self.conn.execute("SELECT * FROM payments WHERE status = 'pending'").fetchall()]
+    # ==============================================================================
+    # PAYMENTS
+    # ==============================================================================
+    def add_manual_payment(self, user_id: int, phone: str, mpesa_code: str):
+        self.conn.execute(
+            "INSERT INTO payments (user_id, phone, mpesa_code) VALUES (?, ?, ?)",
+            (user_id, phone, mpesa_code)
+        )
+        self.conn.commit()
 
-    def close(self): self.conn.close()
+    def get_pending_payments(self) -> List[Dict]:
+        rows = self.conn.execute("SELECT * FROM payments WHERE status = 'pending'").fetchall()
+        return [dict(row) for row in rows]
+
+    def approve_manual_payment(self, payment_id: int):
+        self.conn.execute("UPDATE payments SET status = 'approved' WHERE id = ? AND status = 'pending'", (payment_id,))
+        row = self.conn.execute("SELECT user_id FROM payments WHERE id = ? AND status = 'approved'", (payment_id,)).fetchone()
+        if row:
+            self.upgrade_to_premium(row["user_id"])
+        self.conn.commit()
+
+    def reject_manual_payment(self, payment_id: int):
+        self.conn.execute("UPDATE payments SET status = 'rejected' WHERE id = ? AND status = 'pending'", (payment_id,))
+        self.conn.commit()
+
+    # ==============================================================================
+    # CLEANUP
+    # ==============================================================================
+    def close(self):
+        self.conn.close()
