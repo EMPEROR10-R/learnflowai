@@ -152,7 +152,8 @@ def settings_tab():
     st.markdown('### Two-Factor Authentication')
     if db.is_2fa_enabled(uid) and not st.session_state.get('show_qr'):
         st.success('2FA Enabled')
-        if st.button('Disable 2FA'): db.disable_2fa(uid); st.success('Disabled')
+        # db.disable_2fa is missing, assuming it exists for functionality
+        if st.button('Disable 2FA'): st.error('Disable function not fully implemented'); #db.disable_2fa(uid); st.success('Disabled')
     else:
         if st.session_state.get('show_qr'):
             qr = st.session_state.get('qr_code')
@@ -203,6 +204,9 @@ def essay_tab(): st.header('Essay Grader'); st.info('Paste essay then grade')
 def admin_tab(): st.header('Admin'); st.info('Admin panel')
 
 mapping = {'Chat Tutor':chat_tab, 'Progress':progress_tab, 'Settings':settings_tab, 'PDF Q&A':pdf_tab, 'Exam Prep':exam_tab, 'Essay Grader':essay_tab, 'Premium': lambda: st.info('Premium'), 'Admin':admin_tab}
+
+# FIX: Define the list of tabs before using it in st.tabs()
+tabs = list(mapping.keys())
 
 for name, tab in zip(tabs, st.tabs(tabs)):
     with tab:
