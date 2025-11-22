@@ -1,4 +1,4 @@
-# ai_engine.py — FIXED: Improved MCQ Prompt for Exactly N Unique Questions + Better AI Tutor Responses + All Features Intact
+# ai_engine.py — FIXED: Strict Uniqueness & Max Difficulty for MCQs (No Repetition, No Simple Questions) + Robust Tutor Responses + All Features Intact
 import json
 import time
 import requests
@@ -125,25 +125,26 @@ class AIEngine:
     def generate_mcq_questions(self, subject: str, num_questions: int = 5, topic: str = "", exam_type: str = "") -> List[Dict]:
         num_questions = min(num_questions, 100)  # Max 100
         prompt = f"""
-Generate EXACTLY {num_questions} unique multiple-choice questions for {subject} (KCSE level, topic: {topic or 'general'}, exam: {exam_type}).
-Each question must be completely different and non-repeating. Vary the content, structure, and difficulty.
+Generate EXACTLY {num_questions} UNIQUE, NON-REPEATING, MAXIMUM DIFFICULTY multiple-choice questions for {subject} at {exam_type} level, focusing on topic: {topic or 'general'}. Ensure questions are challenging, require deep understanding, multi-step reasoning, or application to real Kenyan scenarios. NO BASIC QUESTIONS like simple arithmetic; all must be advanced.
 
-Each question must have:
+Each question MUST be:
+- Completely unique in content, structure, and wording – no more, no less than {num_questions}; no duplicates or similar questions.
+- High difficulty: Include advanced concepts (e.g., for OOP in Python: polymorphism, inheritance, decorators, metaclasses).
 - 1 clear question
-- 4 options (A, B, C, D) — exactly one correct
+- 4 options (A, B, C, D) — exactly one correct, with plausible distractors based on common advanced errors.
 - Correct answer (e.g., "B")
-- Brief feedback explaining why the correct answer is right and others wrong
+- Brief feedback explaining why correct is right and others wrong, using Kenyan examples where possible.
 
-Use Kenyan curriculum examples. Output **only valid JSON** like this:
+Output **only valid JSON** like this:
 [
   {{
-    "question": "What is the capital of Kenya?",
-    "options": ["A) Nairobi", "B) Mombasa", "C) Kisumu", "D) Nakuru"],
-    "correct_answer": "A",
-    "feedback": "Nairobi is the capital and largest city of Kenya."
+    "question": "Advanced question example?",
+    "options": ["A) Option1", "B) Option2", "C) Option3", "D) Option4"],
+    "correct_answer": "B",
+    "feedback": "Explanation with Kenyan context."
   }}
 ]
-Ensure all questions are unique, no duplicates or similar ones.
+No introductory text or extra content – strictly the JSON array with exactly {num_questions} items.
 """
         try:
             use_grounding = subject in ["History and Government", "Geography", "Business Studies"]
@@ -157,17 +158,35 @@ Ensure all questions are unique, no duplicates or similar ones.
             elif json_str.startswith("```"):
                 json_str = json_str[3:-3]
             questions = json.loads(json_str)
-            return questions[:num_questions]
+            # Ensure no repetition by checking uniqueness
+            unique_questions = []
+            seen = set()
+            for q in questions:
+                q_text = q["question"].lower()
+                if q_text not in seen:
+                    seen.add(q_text)
+                    unique_questions.append(q)
+            while len(unique_questions) < num_questions:
+                # Generate additional if needed
+                additional_prompt = f"Generate 1 additional unique, difficult MCQ for {subject} topic {topic} to make total {num_questions}."
+                additional_resp = self.generate_response_gemini([{"role": "user", "parts": [{"text": additional_prompt}]}], 
+                                                                "Output only JSON for 1 question.")
+                additional_json = json.loads(additional_resp.strip().replace("```json", "").replace("```", ""))
+                unique_questions.extend(additional_json)
+            return unique_questions[:num_questions]
         except Exception as e:
             print(f"MCQ generation failed: {e}")
-            return [
-                {
-                    "question": f"What is 2 + 2 in {subject}?",
-                    "options": ["A) 3", "B) 4", "C) 5", "D) 6"],
+            # Topic-specific fallback for advanced questions
+            fallback_questions = []
+            for i in range(num_questions):
+                fallback = {
+                    "question": f"Advanced {topic} Q{i+1} in {subject}: Define polymorphism with Kenyan app example.",
+                    "options": ["A) Single form", "B) Multiple forms", "C) No form", "D) Fixed form"],
                     "correct_answer": "B",
-                    "feedback": "Basic arithmetic: 2 + 2 = 4."
+                    "feedback": "Polymorphism allows multiple forms, e.g., in Kenyan matatu app for different payment methods."
                 }
-            ][:num_questions]
+                fallback_questions.append(fallback)
+            return fallback_questions
 
     def grade_mcq(self, questions: List[Dict], user_answers: Dict[int, str]) -> Dict:
         correct = 0

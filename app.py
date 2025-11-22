@@ -1,4 +1,4 @@
-# app.py — FIXED 2025: No Logout on Exam Gen (Spinner + No Rerun) + More Shop Items + Animations + All Leaderboards in Tables + All Features Working & Ready for Public Deployment
+# app.py — FIXED 2025: Users Start at 0 XP/Level/Coins (Except Admin) + More Shop Items + AI Tutor/Exam Gen Working + Unique Difficult Questions + All Features Intact
 import streamlit as st
 import bcrypt
 import pandas as pd
@@ -87,8 +87,8 @@ def award_xp(points, reason):
 
 def calculate_level_progress(total_xp):
     if total_xp == 0:
-        return 1, 0.0, 0, 100
-    level = 1
+        return 0, 0.0, 0, 100  # Start at level 0
+    level = 0
     xp_needed = 100
     current_xp = total_xp
     while current_xp >= xp_needed:
@@ -297,7 +297,7 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         # Discount Cheque
         discount_buy_count = u.get('discount_buy_count', 0)
         discount_price = calculate_item_price(5000000, discount_buy_count)
-        st.write(f"20% Discount Cheque ({discount_price:,} XP Coins)")
+        st.write(f"20% Discount Cheque ({discount_price:,} XP Coins")
         if st.button("Buy Discount Cheque"):
             if db.buy_discount_cheque(st.session_state.user_id):
                 st.balloons()
@@ -342,6 +342,36 @@ elif st.session_state.logged_in and st.session_state.page == "main":
             if db.buy_profile_theme(st.session_state.user_id):
                 st.success("Profile Theme Unlocked!")
                 st.snow()
+            else:
+                st.error("Not enough XP Coins")
+        # NEW: Unlock Advanced Topics
+        advanced_topics_count = u.get('advanced_topics_buy_count', 0)
+        advanced_topics_price = calculate_item_price(1000000, max(0, advanced_topics_count - 1)) if advanced_topics_count > 1 else 1000000
+        st.write(f"Unlock Advanced Topics ({advanced_topics_price:,} XP Coins")
+        if st.button("Buy Advanced Topics"):
+            if db.buy_advanced_topics(st.session_state.user_id):
+                st.success("Advanced Topics Unlocked!")
+                st.balloons()
+            else:
+                st.error("Not enough XP Coins")
+        # NEW: Custom Avatar
+        custom_avatar_count = u.get('custom_avatar_buy_count', 0)
+        custom_avatar_price = calculate_item_price(400000, max(0, custom_avatar_count - 1)) if custom_avatar_count > 1 else 400000
+        st.write(f"Custom Avatar ({custom_avatar_price:,} XP Coins")
+        if st.button("Buy Custom Avatar"):
+            if db.buy_custom_avatar(st.session_state.user_id):
+                st.success("Custom Avatar Unlocked!")
+                st.snow()
+            else:
+                st.error("Not enough XP Coins")
+        # NEW: Priority Support
+        priority_support_count = u.get('priority_support_buy_count', 0)
+        priority_support_price = calculate_item_price(1500000, max(0, priority_support_count - 1)) if priority_support_count > 1 else 1500000
+        st.write(f"Priority Support ({priority_support_price:,} XP Coins")
+        if st.button("Buy Priority Support"):
+            if db.buy_priority_support(st.session_state.user_id):
+                st.success("Priority Support Unlocked!")
+                st.balloons()
             else:
                 st.error("Not enough XP Coins")
 

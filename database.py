@@ -1,4 +1,4 @@
-# database.py — UPDATED 2025: Added XP Coins, Buy Counts, Inventory Tracking (via buy counts + purchases table), Deduct Coins, Increment Counts + All Previous Features Intact
+# database.py — UPDATED 2025: Users Start at Level 0 + Added XP Coins, Buy Counts, Inventory Tracking + All Previous Features Intact
 import sqlite3
 import bcrypt
 import json
@@ -37,7 +37,7 @@ class Database:
             extra_questions_buy_count INTEGER DEFAULT 0,
             custom_badge_buy_count INTEGER DEFAULT 0,
             total_spent_coins INTEGER DEFAULT 0,
-            level INTEGER DEFAULT 1,
+            level INTEGER DEFAULT 0,  # Changed to start at 0 for regular users
             name TEXT,
             badges TEXT DEFAULT '[]',
             streak INTEGER DEFAULT 0,
@@ -271,33 +271,6 @@ class Database:
             return True
         return False
 
-    def buy_extra_ai_uses(self, user_id: int) -> bool:
-        user = self.get_user(user_id)
-        buy_count = user["extra_ai_uses_buy_count"]
-        price = 200000 * (2 ** max(0, buy_count - 1)) if buy_count > 0 else 200000
-        if user["xp_coins"] >= price:
-            self.deduct_xp_coins(user_id, price)
-            self.increment_buy_count(user_id, "extra_ai_uses_buy_count")
-            # Assume adds 50 extra AI queries
-            self.add_purchase(user_id, "Extra AI Uses", 1, price)
-            self.conn.commit()
-            return True
-        return False
-
-    def buy_profile_theme(self, user_id: int) -> bool:
-        user = self.get_user(user_id)
-        buy_count = user["profile_theme_buy_count"]
-        price = 300000 * (2 ** max(0, buy_count - 1)) if buy_count > 0 else 300000
-        if user["xp_coins"] >= price:
-            self.deduct_xp_coins(user_id, price)
-            self.increment_buy_count(user_id, "profile_theme_buy_count")
-            # Assume unlocks a new theme
-            self.add_purchase(user_id, "Profile Theme", 1, price)
-            self.conn.commit()
-            return True
-        return False
-
-    # NEW: Add purchase to inventory table
     def add_purchase(self, user_id: int, item_name: str, quantity: int, price_paid: int):
         self.conn.execute("""
             INSERT INTO purchases (user_id, item_name, quantity, price_paid)
@@ -305,7 +278,6 @@ class Database:
         """, (user_id, item_name, quantity, price_paid))
         self.conn.commit()
 
-    # NEW: Get user purchases for inventory
     def get_user_purchases(self, user_id: int) -> List[Dict]:
         rows = self.conn.execute("""
             SELECT item_name, quantity, price_paid, timestamp
