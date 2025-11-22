@@ -1,152 +1,112 @@
-# ai_engine.py — FULLY WORKING WITH OPENAI (gpt-4o-mini) — NO FEATURES LOST
+# ai_engine.py
+import streamlit as st
+from openai import OpenAI
 import json
-import time
-import requests
-import openai
-from streamlit import cache_data, secrets
-from typing import List, Dict
-import io
-import PyPDF2
-
-# Use OpenAI via official SDK
-openai.api_key = secrets.get("OPENAI_API_KEY", "")
 
 class AIEngine:
     def __init__(self):
-        if not openai.api_key or openai.api_key == "":
-            raise ValueError("OPENAI_API_KEY not found in Streamlit secrets!")
-
-    @cache_data(ttl="2h", show_spinner="Extracting PDF…")
-    def extract_text_from_pdf(_self, pdf_bytes: bytes) -> str:
+        # Initialize the OpenAI client. It automatically looks for 'OPENAI_API_KEY'
+        # in the environment variables or in st.secrets if deployed on Streamlit Cloud.
+        # Ensure your key is named 'OPENAI_API_KEY' in your secrets.toml file/Streamlit secrets.
         try:
-            pdf_file = io.BytesIO(pdf_bytes)
-            reader = PyPDF2.PdfReader(pdf_file)
-            text = ""
-            for page in reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-            return text.strip() or "No readable text found in PDF."
+            self.client = OpenAI(api_key=st.secrets['OPENAI_API_KEY'])
+            self.model = "gpt-4o"  # Using a powerful model for complex tasks
         except Exception as e:
-            return f"PDF reading error: {e}"
+            st.error(f"Failed to initialize OpenAI Client. Check your OPENAI_API_KEY secret. Error: {e}")
+            self.client = None
 
-    def generate_response(self, user_query: str, system_prompt: str) -> str:
+    def _call_openai(self, system_prompt, user_prompt, temperature=0.7):
+        """Internal method to handle the API call."""
+        if not self.client:
+            return "AI service is currently unavailable. Please check the OpenAI API Key configuration."
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_query}
-                ],
-                temperature=0.7,
-                max_tokens=4096
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
             )
-            return response.choices[0].message.content.strip()
+            return response.choices[0].message.content
         except Exception as e:
-            return f"OpenAI error: {str(e)}"
+            return f"An error occurred while calling the OpenAI API: {e}"
 
-    def stream_response(self, user_query: str, system_prompt: str):
+    def generate_response(self, user_prompt, system_prompt, temperature=0.7):
+        """Generates a standard text response (Chat Tutor/PDF Q&A)."""
+        return self._call_openai(system_prompt, user_prompt, temperature)
+
+    def generate_exam_questions(self, subject, exam_type, count, topic):
+        """Generates MCQ exam questions using JSON output."""
+        system_prompt = f"""
+        You are an expert Kenyan curriculum exam generator. Generate exactly {count} multiple-choice questions for the '{subject}' subject, suitable for a '{exam_type}' exam, focusing on the topic '{topic}'. 
+        Each question must have 4 options (A, B, C, D) and specify the correct answer. 
+        Respond ONLY with a JSON list of objects, strictly adhering to the following structure: 
+        [
+            {{"question": "...", "options": ["A: ...", "B: ...", "C: ...", "D: ..."], "answer": "The correct option text"}},
+            ...
+        ]
+        """
+        user_prompt = f"Generate {count} unique, high-difficulty questions on {subject} - {topic} for the {exam_type} level."
+        
+        # Use a low temperature for predictable output (JSON)
+        json_response = self._call_openai(system_prompt, user_prompt, temperature=0.1)
+        
+        # Attempt to parse the JSON response
         try:
-            stream = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_query}
-                ],
-                temperature=0.7,
-                stream=True
-            )
-            for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
-        except Exception as e:
-            yield f"Streaming error: {e}"
+            return json.loads(json_response)
+        except json.JSONDecodeError:
+            st.error("Failed to parse AI-generated JSON. Please try again.")
+            return []
 
-    def generate_mcq_questions(self, subject: str, num_questions: int = 5, topic: str = "", exam_type: str = "") -> List[Dict]:
-        num_questions = min(num_questions, 100)
-        prompt = f"""
-Generate EXACTLY {num_questions} unique, non-repeating, MAXIMUM DIFFICULTY MCQs for {subject} ({exam_type} level) on topic: {topic or 'general'}.
-NO simple questions like "2+2". All must be advanced, require deep thinking, multi-step logic, Kenyan examples where possible.
+    def grade_mcq(self, questions, user_answers):
+        """Grades the user's answers against the correct answers provided in the questions list."""
+        correct_count = 0
+        total_questions = len(questions)
+        feedback = []
 
-Each question must have:
-- 4 options (A, B, C, D)
-- Exactly one correct answer
-- Brief feedback with explanation
-
-Output ONLY valid JSON array like this:
-[
-  {{
-    "question": "Hard question here?",
-    "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
-    "correct_answer": "B",
-    "feedback": "Detailed explanation..."
-  }}
-]
-Exactly {num_questions} items. No extra text.
-"""
-        try:
-            resp = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are a strict Kenyan exam generator. Output ONLY valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.6
-            )
-            text = resp.choices[0].message.content.strip()
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0]
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0]
-            questions = json.loads(text)
-            return questions[:num_questions]
-        except Exception as e:
-            print(f"MCQ failed: {e}")
-            # Advanced fallback for Python OOP
-            if "python" in subject.lower() and "oop" in topic.lower():
-                return [
-                    {
-                        "question": f"OOP Q{i+1}: In a Kenyan matatu booking system using inheritance and polymorphism, what happens when a LuxuryMatatu overrides calculate_fare()?",
-                        "options": ["A) Parent method runs", "B) Child method runs", "C) Syntax error", "D) Both run"],
-                        "correct_answer": "B",
-                        "feedback": "Polymorphism allows child class to override and provide its own implementation."
-                    } for i in range(num_questions)
-                ]
-            return [{"question": f"Advanced {subject} Q{i+1}", "options": ["A", "B", "C", "D"], "correct_answer": "B", "feedback": "Correct"} for i in range(num_questions)]
-
-    def generate_exam_questions(self, subject, exam_type, num_questions, topic=""):
-        return self.generate_mcq_questions(subject, num_questions, topic, exam_type)
-
-    def grade_mcq(self, questions: List[Dict], user_answers: Dict[int, str]) -> Dict:
-        correct = sum(1 for i, q in enumerate(questions) if user_answers.get(i, "").strip() == q["correct_answer"].strip())
-        percentage = round((correct / len(questions)) * 100, 1) if questions else 0
+        for i, q in enumerate(questions):
+            correct_answer = q['answer']
+            user_answer = user_answers.get(i)
+            
+            is_correct = user_answer == correct_answer
+            
+            if is_correct:
+                correct_count += 1
+            
+            feedback.append({
+                "question": q['question'],
+                "user_answer": user_answer,
+                "correct_answer": correct_answer,
+                "is_correct": is_correct
+            })
+            
+        percentage = (correct_count / total_questions) * 100 if total_questions > 0 else 0
+        
         return {
-            "correct": correct,
-            "total": len(questions),
-            "percentage": percentage,
-            "results": [
-                {
-                    "question": q["question"],
-                    "user_answer": user_answers.get(i, "No answer"),
-                    "correct_answer": q["correct_answer"],
-                    "is_correct": user_answers.get(i, "").strip() == q["correct_answer"].strip(),
-                    "feedback": q.get("feedback", "")
-                } for i, q in enumerate(questions)
-            ]
+            "score": correct_count,
+            "total": total_questions,
+            "percentage": round(percentage, 2),
+            "feedback": feedback
         }
 
-    def grade_essay(self, essay: str, rubric: str = "KCSE Standard Rubric") -> Dict:
+    def grade_essay(self, essay_text, rubric):
+        """Grades an essay and provides feedback using JSON output."""
+        system_prompt = f"""
+        You are an expert Kenyan KCSE marker. Grade the following essay based on the '{rubric}' standard rubric. 
+        Your grading MUST be objective, covering content, language, organization, and mechanics.
+        Respond ONLY with a JSON object, strictly adhering to the following structure:
+        {{"score": 15, "max_score": 20, "feedback": "Detailed feedback on Content, Language, etc.", "suggestions": "Specific areas for improvement"}}
+        The score must be between 0 and 20.
+        """
+        user_prompt = f"Grade this essay:\n\n{essay_text}"
+        
+        json_response = self._call_openai(system_prompt, user_prompt, temperature=0.2)
+        
         try:
-            resp = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an expert KCSE essay grader. Be strict, fair, and detailed."},
-                    {"role": "user", "content": f"Grade this essay (0-100) using {rubric}:\n\n{essay}\n\nReturn ONLY JSON: {{\"score\": int, \"feedback\": \"string\"}}"}
-                ]
-            )
-            text = resp.choices[0].message.content.strip()
-            if "```" in text:
-                text = text.split("```")[1].split("```")[0]
-            return json.loads(text)
-        except Exception as e:
-            return {"score": 65, "feedback": f"Auto-graded (OpenAI error): {e}"}
+            return json.loads(json_response)
+        except json.JSONDecodeError:
+            return {"score": 0, "max_score": 20, "feedback": "AI grading failed due to format error.", "suggestions": "Ensure the essay is clear."}
