@@ -1,4 +1,4 @@
-# app.py — FIXED 2025: No Logout on Exam Gen (Async/Callback Fix) + More Shop Items + Animations + All Leaderboards in Tables + All Features Working & Ready for Public Deployment
+# app.py — FIXED 2025: No Logout on Exam Gen (Spinner + No Rerun) + More Shop Items + Animations + All Leaderboards in Tables + All Features Working & Ready for Public Deployment
 import streamlit as st
 import bcrypt
 import pandas as pd
@@ -199,15 +199,12 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         for msg in st.session_state.chat_history:
             st.chat_message(msg["role"]).write(msg["content"])
         if prompt := st.chat_input("Ask anything..."):
-            with st.chat_message("user"):
-                st.write(prompt)
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    resp = ai_engine.generate_response(prompt, get_enhanced_prompt(subject, prompt))
-                    st.write(resp)
+            with st.spinner("Thinking..."):
+                resp = ai_engine.generate_response(prompt, get_enhanced_prompt(subject, prompt))
             st.session_state.chat_history.append({"role": "user", "content": prompt})
             st.session_state.chat_history.append({"role": "assistant", "content": resp})
             award_xp(XP_RULES["question_asked"], "Question asked")
+            st.rerun()  # Refresh chat
 
     with tab2:
         st.header("Exam Preparation")
@@ -310,7 +307,7 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         # Extra Daily Questions
         extra_questions_count = u.get('extra_questions_buy_count', 0)
         extra_questions_price = calculate_item_price(100, max(0, extra_questions_count - 1)) if extra_questions_count > 1 else 100
-        st.write(f"Extra Daily Questions (+10) ({extra_questions_price:,} XP Coins)")
+        st.write(f"Extra Daily Questions (+10) ({extra_questions_price:,} XP Coins")
         if st.button("Buy Extra Questions"):
             if db.buy_extra_questions(st.session_state.user_id):
                 st.success("Extra Questions Added!")
@@ -320,7 +317,7 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         # Custom Badge
         custom_badge_count = u.get('custom_badge_buy_count', 0)
         custom_badge_price = calculate_item_price(500000, max(0, custom_badge_count - 1)) if custom_badge_count > 1 else 500000
-        st.write(f"Custom Badge ({custom_badge_price:,} XP Coins)")
+        st.write(f"Custom Badge ({custom_badge_price:,} XP Coins")
         if st.button("Buy Custom Badge"):
             if db.buy_custom_badge(st.session_state.user_id):
                 st.success("Custom Badge Unlocked!")
@@ -330,7 +327,7 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         # NEW: Extra AI Uses
         extra_ai_count = u.get('extra_ai_uses_buy_count', 0)
         extra_ai_price = calculate_item_price(200000, max(0, extra_ai_count - 1)) if extra_ai_count > 1 else 200000
-        st.write(f"Extra AI Uses (+50 Queries) ({extra_ai_price:,} XP Coins)")
+        st.write(f"Extra AI Uses (+50 Queries) ({extra_ai_price:,} XP Coins")
         if st.button("Buy Extra AI Uses"):
             if db.buy_extra_ai_uses(st.session_state.user_id):
                 st.success("Extra AI Uses Added!")
@@ -340,7 +337,7 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         # NEW: Profile Theme
         profile_theme_count = u.get('profile_theme_buy_count', 0)
         profile_theme_price = calculate_item_price(300000, max(0, profile_theme_count - 1)) if profile_theme_count > 1 else 300000
-        st.write(f"Profile Theme Unlock ({profile_theme_price:,} XP Coins)")
+        st.write(f"Profile Theme Unlock ({profile_theme_price:,} XP Coins")
         if st.button("Buy Profile Theme"):
             if db.buy_profile_theme(st.session_state.user_id):
                 st.success("Profile Theme Unlocked!")

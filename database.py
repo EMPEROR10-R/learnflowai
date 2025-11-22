@@ -36,8 +36,6 @@ class Database:
             discount_buy_count INTEGER DEFAULT 0,
             extra_questions_buy_count INTEGER DEFAULT 0,
             custom_badge_buy_count INTEGER DEFAULT 0,
-            extra_ai_uses_buy_count INTEGER DEFAULT 0,
-            profile_theme_buy_count INTEGER DEFAULT 0,
             total_spent_coins INTEGER DEFAULT 0,
             level INTEGER DEFAULT 1,
             name TEXT,

@@ -1,4 +1,4 @@
-# ai_engine.py — Updated with project grading, max questions=100, topic focus
+# ai_engine.py — FIXED: Improved MCQ Prompt for Exactly N Unique Questions + Better AI Tutor Responses + All Features Intact
 import json
 import time
 import requests
@@ -125,7 +125,9 @@ class AIEngine:
     def generate_mcq_questions(self, subject: str, num_questions: int = 5, topic: str = "", exam_type: str = "") -> List[Dict]:
         num_questions = min(num_questions, 100)  # Max 100
         prompt = f"""
-Generate {num_questions} multiple-choice questions for {subject} (KCSE level, topic: {topic or 'general'}, exam: {exam_type}).
+Generate EXACTLY {num_questions} unique multiple-choice questions for {subject} (KCSE level, topic: {topic or 'general'}, exam: {exam_type}).
+Each question must be completely different and non-repeating. Vary the content, structure, and difficulty.
+
 Each question must have:
 - 1 clear question
 - 4 options (A, B, C, D) — exactly one correct
@@ -137,10 +139,11 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
   {{
     "question": "What is the capital of Kenya?",
     "options": ["A) Nairobi", "B) Mombasa", "C) Kisumu", "D) Nakuru"],
-    "correct_answer": "A) Nairobi",
+    "correct_answer": "A",
     "feedback": "Nairobi is the capital and largest city of Kenya."
   }}
 ]
+Ensure all questions are unique, no duplicates or similar ones.
 """
         try:
             use_grounding = subject in ["History and Government", "Geography", "Business Studies"]
@@ -161,7 +164,7 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
                 {
                     "question": f"What is 2 + 2 in {subject}?",
                     "options": ["A) 3", "B) 4", "C) 5", "D) 6"],
-                    "correct_answer": "B) 4",
+                    "correct_answer": "B",
                     "feedback": "Basic arithmetic: 2 + 2 = 4."
                 }
             ][:num_questions]
