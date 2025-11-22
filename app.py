@@ -1,4 +1,4 @@
-# app.py — UPDATED 2025: Admin Full Premium + XP Shop Exponential Prices + More Consumables + Admin Controls (Upgrade/Downgrade + Payments Table) + Tables/Graphs + All Features Intact
+# app.py — UPDATED 2025: Added Inventory Tracking Table + Exponential Prices for All Items + Admin Full Controls + Tables/Graphs + All Features Intact & Working
 import streamlit as st
 import bcrypt
 import pandas as pd
@@ -287,7 +287,7 @@ elif st.session_state.logged_in and st.session_state.page == "main":
     with tab6:
         st.header("XP Shop")
         st.metric("Your XP Coins", u.get('xp_coins', 0))
-        # Discount Cheque with exponential price
+        # Discount Cheque
         discount_buy_count = u.get('discount_buy_count', 0)
         discount_price = calculate_item_price(5000000, discount_buy_count)
         st.write(f"20% Discount Cheque ({discount_price:,} XP Coins)")
@@ -297,16 +297,12 @@ elif st.session_state.logged_in and st.session_state.page == "main":
                 st.success("Discount Activated!")
             else:
                 st.error("Not enough XP Coins")
-        # Other consumables
         # Extra Daily Questions
-        extra_questions_count = u.get('extra_questions_buy_count', 0)  # Assume added to DB
+        extra_questions_count = u.get('extra_questions_buy_count', 0)
         extra_questions_price = calculate_item_price(100, max(0, extra_questions_count - 1)) if extra_questions_count > 1 else 100
         st.write(f"Extra Daily Questions (+10) ({extra_questions_price:,} XP Coins)")
         if st.button("Buy Extra Questions"):
-            if u['xp_coins'] >= extra_questions_price:
-                db.deduct_xp_coins(st.session_state.user_id, extra_questions_price)
-                db.increment_buy_count(st.session_state.user_id, 'extra_questions_buy_count')
-                # Logic to add extra questions
+            if db.buy_extra_questions(st.session_state.user_id):
                 st.success("Extra Questions Added!")
             else:
                 st.error("Not enough XP Coins")
@@ -315,14 +311,19 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         custom_badge_price = calculate_item_price(500000, max(0, custom_badge_count - 1)) if custom_badge_count > 1 else 500000
         st.write(f"Custom Badge ({custom_badge_price:,} XP Coins)")
         if st.button("Buy Custom Badge"):
-            if u['xp_coins'] >= custom_badge_price:
-                db.deduct_xp_coins(st.session_state.user_id, custom_badge_price)
-                db.increment_buy_count(st.session_state.user_id, 'custom_badge_buy_count')
-                # Logic to add badge
+            if db.buy_custom_badge(st.session_state.user_id):
                 st.success("Custom Badge Unlocked!")
             else:
                 st.error("Not enough XP Coins")
-        # Add more as needed
+
+        # NEW: Inventory Tracking Table
+        st.subheader("Your Inventory")
+        purchases = db.get_user_purchases(st.session_state.user_id)
+        if purchases:
+            df_purchases = pd.DataFrame(purchases)
+            st.dataframe(df_purchases, hide_index=True)
+        else:
+            st.info("No purchases yet.")
 
     with tab7:
         st.header("Go Premium")
