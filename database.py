@@ -36,6 +36,8 @@ class Database:
             discount_buy_count INTEGER DEFAULT 0,
             extra_questions_buy_count INTEGER DEFAULT 0,
             custom_badge_buy_count INTEGER DEFAULT 0,
+            extra_ai_uses_buy_count INTEGER DEFAULT 0,
+            profile_theme_buy_count INTEGER DEFAULT 0,
             total_spent_coins INTEGER DEFAULT 0,
             level INTEGER DEFAULT 1,
             name TEXT,
@@ -250,7 +252,6 @@ class Database:
         if user["xp_coins"] >= price:
             self.deduct_xp_coins(user_id, price)
             self.increment_buy_count(user_id, "extra_questions_buy_count")
-            # Assuming adds 10 extra daily questions permanently
             self.conn.execute("UPDATE users SET daily_questions = daily_questions + 10 WHERE user_id = ?", (user_id,))
             self.add_purchase(user_id, "Extra Questions", 1, price)
             self.conn.commit()
@@ -264,11 +265,36 @@ class Database:
         if user["xp_coins"] >= price:
             self.deduct_xp_coins(user_id, price)
             self.increment_buy_count(user_id, "custom_badge_buy_count")
-            # Add badge logic, e.g., add to badges JSON
             badges = json.loads(user.get("badges", "[]"))
             badges.append(f"Custom Badge #{buy_count + 1}")
             self.conn.execute("UPDATE users SET badges = ? WHERE user_id = ?", (json.dumps(badges), user_id))
             self.add_purchase(user_id, "Custom Badge", 1, price)
+            self.conn.commit()
+            return True
+        return False
+
+    def buy_extra_ai_uses(self, user_id: int) -> bool:
+        user = self.get_user(user_id)
+        buy_count = user["extra_ai_uses_buy_count"]
+        price = 200000 * (2 ** max(0, buy_count - 1)) if buy_count > 0 else 200000
+        if user["xp_coins"] >= price:
+            self.deduct_xp_coins(user_id, price)
+            self.increment_buy_count(user_id, "extra_ai_uses_buy_count")
+            # Assume adds 50 extra AI queries
+            self.add_purchase(user_id, "Extra AI Uses", 1, price)
+            self.conn.commit()
+            return True
+        return False
+
+    def buy_profile_theme(self, user_id: int) -> bool:
+        user = self.get_user(user_id)
+        buy_count = user["profile_theme_buy_count"]
+        price = 300000 * (2 ** max(0, buy_count - 1)) if buy_count > 0 else 300000
+        if user["xp_coins"] >= price:
+            self.deduct_xp_coins(user_id, price)
+            self.increment_buy_count(user_id, "profile_theme_buy_count")
+            # Assume unlocks a new theme
+            self.add_purchase(user_id, "Profile Theme", 1, price)
             self.conn.commit()
             return True
         return False

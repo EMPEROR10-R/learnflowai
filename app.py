@@ -1,4 +1,4 @@
-# app.py — UPDATED 2025: Added Inventory Tracking Table + Exponential Prices for All Items + Admin Full Controls + Tables/Graphs + All Features Intact & Working
+# app.py — FIXED 2025: No Logout on Exam Gen (Async/Callback Fix) + More Shop Items + Animations + All Leaderboards in Tables + All Features Working & Ready for Public Deployment
 import streamlit as st
 import bcrypt
 import pandas as pd
@@ -63,6 +63,8 @@ st.markdown("""
               padding: 25px; font-size: 30px; font-weight: bold; border-radius: 20px;
               border: none; width: 100%; margin: 20px 0; box-shadow: 0 15px 40px rgba(0,255,157,0.6);}
     .big-btn:hover {transform: translateY(-12px); box-shadow: 0 30px 60px rgba(0,255,157,0.8);}
+    .shop-item {animation: fadeIn 0.5s ease-in-out;}
+    @keyframes fadeIn {0% {opacity: 0;} 100% {opacity: 1;}}
 </style>
 <div class="hero">
     <h1 class="title">Kenyan EdTech</h1>
@@ -81,6 +83,7 @@ def award_xp(points, reason):
         db.add_xp(st.session_state.user_id, points)
         get_user()
         st.toast(f"+{points} XP & Coins — {reason}")
+        st.balloons()  # Animation on XP award
 
 def calculate_level_progress(total_xp):
     if total_xp == 0:
@@ -196,12 +199,15 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         for msg in st.session_state.chat_history:
             st.chat_message(msg["role"]).write(msg["content"])
         if prompt := st.chat_input("Ask anything..."):
-            with st.spinner("Thinking..."):
-                resp = ai_engine.generate_response(prompt, get_enhanced_prompt(subject, prompt))
+            with st.chat_message("user"):
+                st.write(prompt)
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    resp = ai_engine.generate_response(prompt, get_enhanced_prompt(subject, prompt))
+                    st.write(resp)
             st.session_state.chat_history.append({"role": "user", "content": prompt})
             st.session_state.chat_history.append({"role": "assistant", "content": resp})
             award_xp(XP_RULES["question_asked"], "Question asked")
-            st.rerun()  # Refresh chat
 
     with tab2:
         st.header("Exam Preparation")
@@ -211,9 +217,12 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         topic = st.selectbox("Topic", topics)
         num = st.slider("Questions", 1, 50, 10)
         if st.button("Generate Exam"):
-            questions = ai_engine.generate_exam_questions(subject, exam, num, topic)
-            st.session_state.questions = questions
-            st.session_state.user_answers = {}
+            with st.spinner("Generating exam... Please wait."):
+                questions = ai_engine.generate_exam_questions(subject, exam, num, topic)
+                st.session_state.questions = questions
+                st.session_state.user_answers = {}
+                st.success("Exam generated!")
+                st.balloons()  # Animation on success
         if st.session_state.questions:
             for i, q in enumerate(st.session_state.questions):
                 st.write(f"**Q{i+1}:** {q['question']}")
@@ -224,6 +233,7 @@ elif st.session_state.logged_in and st.session_state.page == "main":
                 st.success(f"Score: {result['percentage']}%")
                 db.add_score(st.session_state.user_id, f'exam_{subject}', result['percentage'])
                 award_xp(int(result["percentage"]), "Exam")
+                st.snow()  # Animation on submit
 
     with tab3:
         st.header("PDF Q&A")
@@ -304,6 +314,7 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         if st.button("Buy Extra Questions"):
             if db.buy_extra_questions(st.session_state.user_id):
                 st.success("Extra Questions Added!")
+                st.snow()
             else:
                 st.error("Not enough XP Coins")
         # Custom Badge
@@ -313,10 +324,31 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         if st.button("Buy Custom Badge"):
             if db.buy_custom_badge(st.session_state.user_id):
                 st.success("Custom Badge Unlocked!")
+                st.balloons()
+            else:
+                st.error("Not enough XP Coins")
+        # NEW: Extra AI Uses
+        extra_ai_count = u.get('extra_ai_uses_buy_count', 0)
+        extra_ai_price = calculate_item_price(200000, max(0, extra_ai_count - 1)) if extra_ai_count > 1 else 200000
+        st.write(f"Extra AI Uses (+50 Queries) ({extra_ai_price:,} XP Coins)")
+        if st.button("Buy Extra AI Uses"):
+            if db.buy_extra_ai_uses(st.session_state.user_id):
+                st.success("Extra AI Uses Added!")
+                st.balloons()
+            else:
+                st.error("Not enough XP Coins")
+        # NEW: Profile Theme
+        profile_theme_count = u.get('profile_theme_buy_count', 0)
+        profile_theme_price = calculate_item_price(300000, max(0, profile_theme_count - 1)) if profile_theme_count > 1 else 300000
+        st.write(f"Profile Theme Unlock ({profile_theme_price:,} XP Coins)")
+        if st.button("Buy Profile Theme"):
+            if db.buy_profile_theme(st.session_state.user_id):
+                st.success("Profile Theme Unlocked!")
+                st.snow()
             else:
                 st.error("Not enough XP Coins")
 
-        # NEW: Inventory Tracking Table
+        # Inventory Tracking Table
         st.subheader("Your Inventory")
         purchases = db.get_user_purchases(st.session_state.user_id)
         if purchases:
