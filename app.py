@@ -1,202 +1,244 @@
-# app.py — FINAL VERSION: Full Exam Prep + All Subjects + Python Code Support
+# app.py — FULL REWRITE: All Features + 2FA in Login Flow + Admin Fix
 import streamlit as st
 import bcrypt
-import json
 import pandas as pd
-from datetime import date, timedelta
-from database import Database
-from ai_engine import AIEngine
-from prompts import EXAM_TYPES
+import plotly.express as px
 import re
 import io
+import PyPDF2
 import qrcode
 import base64
+import time
+from database import Database
+from ai_engine import AIEngine
+from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
+from utils import VoiceInputHelper, Translator_Utils, cached_pdf_extract
 
-# === INIT ===
-st.set_page_config(page_title="Kenyan EdTech", layout="wide")
+LEVELS = {1: 0, 2: 100, 3: 250, 4: 500, 5: 1000}
+XP_RULES = {"question_asked": 10, "pdf_question": 15, "quiz_generated": 5, "essay_5_percent": 1, "2fa_enabled": 20}
+
+st.set_page_config(page_title='Kenyan EdTech', layout='wide')
+
 db = Database()
 db.auto_downgrade()
 
-real_ai = AIEngine(st.secrets.get("GEMINI_API_KEY", ""))
-ai_engine = real_ai if getattr(real_ai, "gemini_key", None) else type("obj", (), {"generate_exam_questions": lambda *a: [], "grade_mcq": lambda q, a: {"correct": 0, "total": 0, "percentage": 0, "results": []}})()
+real_ai = AIEngine(st.secrets.get('GEMINI_API_KEY', ''))
+ai_engine = real_ai if getattr(real_ai, 'gemini_key', None) else LocalFallbackAI()
 
-if "initialized" not in st.session_state:
-    st.session_state.update({
-        "logged_in": False, "user_id": None, "user": None,
-        "current_subject": "Mathematics", "lang": "en",
-        "current_exam": None, "user_answers": {}, "last_result": None
-    })
+if 'initialized' not in st.session_state:
+    st.session_state.update({'logged_in': False, 'user_id': None, 'user': None, 'chat_history': [], 'pdf_text': '', 'show_qr': False, 'secret_key': None, 'qr_code': None, 'current_subject': 'Mathematics', 'lang': 'en', 'show_2fa': False, 'temp_user_id': None})
 
-def get_user():
-    if st.session_state.user_id:
+translator = Translator_Utils()
+
+def get_user(force_reload=False):
+    if st.session_state.user_id and (force_reload or not st.session_state.user):
         st.session_state.user = db.get_user(st.session_state.user_id)
     return st.session_state.user
 
-def award_xp(points, reason):
-    if st.session_state.user_id:
-        db.add_xp(st.session_state.user_id, points)
-        st.toast(f"+{points} XP — {reason}")
+def award_xp(user_id, points, reason):
+    db.add_xp(user_id, points)
+    get_user(force_reload=True)
+    try: st.toast(f'+{points} XP — {reason}')
+    except: st.success(f'+{points} XP — {reason}')
 
-# === SIDEBAR ===
+def safe_add_chat(user_id, subject, user_msg, ai_msg):
+    try:
+        db.add_chat_history(user_id, subject, user_msg, ai_msg)
+    except Exception:
+        pass
+
 with st.sidebar:
-    st.title("Kenyan EdTech")
-    if st.session_state.logged_in and (u := get_user()):
-        icon = "crown" if u.get("username") == "EmperorUnruly" else "brain"
-        st.image(f"https://img.icons8.com/fluency/100/{icon}.png", width=100)
-        st.metric("Total XP", f"{u.get('total_xp',0):,}")
-        st.metric("XP Coins", f"{u.get('xp_coins',0):,}")
-        st.metric("Streak", f"{u.get('streak',0)} days")
-        if u.get("discount_20"): st.success("20% Discount Active!")
+    st.title('Kenyan EdTech')
+    if st.session_state.logged_in:
+        u = get_user()
+        if u:
+            crown = "Crown" if u.get('username') == 'EmperorUnruly' else "Brain"
+            st.image(f"https://img.icons8.com/fluency/100/000000/{crown.lower()}.png", width=100)
+            st.markdown(f"**XP:** {u.get('total_xp',0):,}")
+            st.markdown(f"**Spendable:** {u.get('spendable_xp',0):,}")
+            st.markdown(f"**XP Coins:** {u.get('xp_coins',0):,}")
+            st.markdown(f"**Streak:** {u.get('streak',0)} days")
+            if u.get('discount_20'): st.success("20% Discount Active!")
 
-# === EXAM PREP TAB (PERFECT FLOW) ===
-def exam_tab():
-    st.header("Exam Prep – KCPE • KPSEA • KJSEA • KCSE")
+def chat_tab():
+    st.header(f"Chat Tutor — {st.session_state.current_subject}")
+    for m in st.session_state.chat_history: st.write(m['role'], m['content'])
+    prompt = st.chat_input('Ask a question')
+    if prompt:
+        with st.spinner('Thinking...'):
+            sys_prompt = get_enhanced_prompt(st.session_state.current_subject, prompt)
+            resp = ai_engine.generate_response(prompt, sys_prompt)
+        st.session_state.chat_history.append({'role': 'user', 'content': prompt})
+        st.session_state.chat_history.append({'role': 'assistant', 'content': resp})
+        safe_add_chat(st.session_state.user_id, st.session_state.current_subject, prompt, resp)
+        award_xp(st.session_state.user_id, XP_RULES['question_asked'], 'Chat question')
 
-    # 1. Exam Type
-    exam_type = st.selectbox("Select Exam", list(EXAM_TYPES.keys()), key="exam_type")
-
-    # 2. Subject
-    subjects = EXAM_TYPES[exam_type]["subjects"]
-    subject = st.selectbox("Select Subject", subjects, key="exam_subject")
-
-    # 3. Mode
-    mode = st.radio("Mode", ["General Questions", "Specific Topic"], horizontal=True)
-
-    topic = ""
-    if mode == "Specific Topic":
-        topics = EXAM_TYPES[exam_type].get("topics", {}).get(subject, [])
-        if topics:
-            topic = st.selectbox("Choose Topic", topics)
+def settings_tab():
+    st.header('Settings')
+    uid = st.session_state.user_id
+    st.markdown('### Two-Factor Authentication')
+    if db.is_2fa_enabled(uid) and not st.session_state.get('show_qr'):
+        st.success('2FA Enabled')
+        if st.button('Disable 2FA'): db.disable_2fa(uid); st.success('Disabled'); st.rerun()
+    else:
+        if st.session_state.get('show_qr'):
+            qr = st.session_state.get('qr_code')
+            secret = st.session_state.get('secret_key')
+            if qr:
+                b64 = base64.b64encode(qr).decode()
+                st.image(f"data:image/png;base64,{b64}")
+            if secret: st.code(secret)
+            code = st.text_input('Enter 2FA code')
+            if st.button('Confirm'):
+                if db.verify_2fa_code(uid, code): st.success('2FA enabled'); st.session_state.show_qr = False; award_xp(uid, XP_RULES['2fa_enabled'], '2FA'); st.rerun()
+                else: st.error('Invalid code')
         else:
-            st.info("No specific topics defined for this subject.")
+            if st.button('Enable 2FA'):
+                secret, qr = db.enable_2fa(uid)
+                st.session_state.secret_key = secret
+                st.session_state.qr_code = qr
+                st.session_state.show_qr = True
+                st.rerun()
 
-    # 4. Number of Questions
-    num_questions = st.slider("Number of Questions", 1, 100, 10)
+def pdf_tab():
+    st.header('PDF Q&A')
+    uploaded = st.file_uploader('Upload a PDF', type='pdf')
+    if uploaded:
+        data = uploaded.getvalue()
+        st.session_state.pdf_text = cached_pdf_extract(data, uploaded.name)
+        st.success(f'Loaded {uploaded.name}')
+        if st.checkbox('Show snippet'): st.code(st.session_state.pdf_text[:1000])
+        q = st.chat_input('Ask about PDF')
+        if q:
+            resp = ai_engine.generate_response(q, get_enhanced_prompt(st.session_state.current_subject, q, context=f"Doc:{st.session_state.pdf_text[:10000]}"))
+            st.write(resp)
+            db.increment_daily_pdf(st.session_state.user_id)
+            award_xp(st.session_state.user_id, XP_RULES['pdf_question'], 'PDF Q')
 
-    # 5. Generate Exam
-    if st.button("Generate Exam", type="primary"):
-        with st.spinner("Generating high-quality questions..."):
-            questions = ai_engine.generate_exam_questions(
-                subject=subject,
-                exam_type=exam_type,
-                num_questions=num_questions,
-                topic=topic or ""
-            )
-        st.session_state.current_exam = {
-            "questions": questions,
-            "subject": subject,
-            "exam_type": exam_type,
-            "topic": topic
-        }
+def progress_tab():
+    st.header('Progress')
+    u = get_user()
+    if not u: st.info('No user'); return
+    st.write('Total XP:', u.get('total_xp',0)); st.write('Spendable:', u.get('spendable_xp',0))
+    lb = db.get_xp_leaderboard()
+    if lb: st.dataframe(pd.DataFrame([dict(r) for r in lb]))
+
+def exam_tab():
+    st.header('Exam Prep')
+    exam_type = st.selectbox('Exam Type', list(EXAM_TYPES.keys()))
+    subjects = EXAM_TYPES[exam_type]['subjects']
+    subject = st.selectbox('Subject', subjects)
+    mode = st.radio('Mode', ["General Questions", "Specific Topic", "Project"])
+    if mode == "Specific Topic":
+        topics = EXAM_TYPES[exam_type]['topics'].get(subject, [])
+        topic = st.selectbox('Topic', topics)
+    else:
+        topic = ""
+    num_questions = st.number_input('Number of Questions (Max 100)', min_value=1, max_value=100, value=5)
+    if st.button('Generate'):
+        questions = ai_engine.generate_exam_questions(subject, exam_type, num_questions, topic)
+        st.session_state.questions = questions
         st.session_state.user_answers = {}
-        st.success(f"Generated {len(questions)} questions!")
-        st.rerun()
+    if 'questions' in st.session_state:
+        for i, q in enumerate(st.session_state.questions):
+            st.write(q['question'])
+            st.session_state.user_answers[i] = st.radio("", q['options'], key=f"q{i}")
+        if st.button('Submit'):
+            result = ai_engine.grade_mcq(st.session_state.questions, st.session_state.user_answers)
+            st.write(result)
+            db.add_score(st.session_state.user_id, "exam", result["percentage"])
+            award_xp(st.session_state.user_id, int(result["percentage"]), 'Exam Score')
 
-    # 6. Answer Interface
-    if st.session_state.current_exam:
-        qlist = st.session_state.current_exam["questions"]
-        st.subheader(f"{subject} • {exam_type} • {len(qlist)} Questions")
+def essay_tab():
+    st.header('Essay Grader')
+    essay = st.text_area('Paste essay')
+    rubric = st.text_input('Rubric')
+    if st.button('Grade'):
+        result = ai_engine.grade_essay(essay, rubric)
+        st.write(result)
 
-        for i, q in enumerate(qlist):
-            with st.expander(f"Question {i+1}", expanded=True):
-                st.markdown(f"**Q:** {q['question']}")
-                cols = st.columns(len(q['options']))
-                for j, opt in enumerate(q['options']):
-                    with cols[j]:
-                        st.write(opt)
+def shop_page():
+    user = st.session_state.user
+    st.header("XP Coin Shop")
+    if st.button("Buy 20% Discount Cheque"):
+        if db.buy_discount_cheque(user['user_id']):
+            st.success("Success! 20% discount activated!")
+            st.balloons()
+        else:
+            st.error("Not enough XP Coins!")
 
-                # Large answer box
-                answer = st.text_area(
-                    "Your Answer (write full working, code, explanation)",
-                    height=250,
-                    key=f"ans_{i}"
-                )
-                st.session_state.user_answers[i] = answer
+def emperor_panel():
+    st.header("EmperorUnruly Control")
+    for p in db.get_pending_payments():
+        st.write(f"User {p['user_id']}: {p['mpesa_code']}")
+        if st.button("Approve", key=p['id']):
+            db.approve_payment(p['id'])
+            st.rerun()
 
-                # Python code support
-                if "python" in subject.lower() or "code" in q["question"].lower():
-                    st.code(answer or "# Write your Python code here", language="python")
+IMAGES = ["https://images.unsplash.com/photo-1524178232363-1fb2b075b655?w=1400"]
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Submit & Grade Exam", type="primary", use_container_width=True):
-                with st.spinner("Grading your answers..."):
-                    result = ai_engine.grade_mcq(qlist, st.session_state.user_answers)
-                    st.session_state.last_result = result
-                    db.add_score(st.session_state.user_id, "exam", result["percentage"])
-                    award_xp(int(result["percentage"]), "Exam Score")
-                st.rerun()
+def landing():
+    st.image(IMAGES[0], use_container_width=True)
+    st.markdown("<h1 style='text-align:center;color:#FFD700;'>Kenyan EdTech</h1>", unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align:center;color:#00ff9d;'>Kenya's Most Powerful AI Tutor</h3>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1: st.button("Login", type="primary", use_container_width=True, on_click=lambda: st.session_state.update(login=True))
+    with c2: st.button("Register", use_container_width=True, on_click=lambda: st.session_state.update(reg=True))
+    if st.session_state.get('login') or st.session_state.get('reg'):
+        with st.expander("Account Access", expanded=True):
+            with st.form("auth"):
+                u = st.text_input("Username")
+                e = st.text_input("Email")
+                p = st.text_input("Password", type="password")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.form_submit_button("Login"):
+                        user = db.verify_login(u or e, p)
+                        if user:
+                            st.session_state.temp_user = user
+                            st.session_state.show_2fa = db.is_2fa_enabled(user['user_id'])
+                            st.rerun()
+                        else: st.error("Invalid credentials")
+                with c2:
+                    if st.form_submit_button("Register"):
+                        hashed = bcrypt.hashpw(p.encode(), bcrypt.gensalt())
+                        try:
+                            db.create_user(e, p, u)
+                            st.success("Registered! Login now.")
+                        except: st.error("Username or email taken")
 
-        with col2:
-            if st.button("Generate New Exam", use_container_width=True):
-                st.session_state.current_exam = None
-                st.session_state.user_answers = {}
-                st.session_state.last_result = None
-                st.rerun()
-
-    # 7. Show Results + Corrections
-    if st.session_state.get("last_result"):
-        r = st.session_state.last_result
-        st.success(f"Score: {r['correct']}/{r['total']} → {r['percentage']:.1f}% • +{int(r['percentage'])} XP")
-
-        for i, res in enumerate(r["results"]):
-            with st.expander(f"Question {i+1} • {'Correct' if res['is_correct'] else 'Incorrect'}", expanded=False):
-                st.write(f"**Your Answer:**\n{res['user_answer'] or '—'}")
-                st.write(f"**Correct Answer:** {res['correct_answer']}")
-                st.markdown(f"**Feedback:** {res['feedback']}")
-                if res['is_correct']:
-                    st.success("Correct!")
-                else:
-                    st.error("Review this")
-
-# === OTHER TABS (unchanged for brevity) ===
-def chat_tab(): st.header("Chat Tutor"); st.write("Coming soon...")
-def progress_tab(): st.header("Progress"); st.write("Leaderboard coming...")
-def settings_tab(): st.header("Settings"); st.write("2FA, Profile...")
-def pdf_tab(): st.header("PDF Q&A"); st.write("Upload & ask...")
-def project_tab(): st.header("Projects"); st.write("Python, Agriculture, Pre-Tech...")
-def shop_page(): st.header("Shop"); st.write("Buy 20% Discount Cheque")
-def emperor_panel(): st.header("Emperor Control"); st.write("Approve payments")
-
-# === MAIN MENU ===
 if not st.session_state.logged_in:
-    st.title("Kenyan EdTech")
-    st.markdown("### Kenya's Most Powerful AI Learning Platform")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Login", type="primary", use_container_width=True):
-            st.session_state.show_login = True
-    with col2:
-        if st.button("Register", use_container_width=True):
-            st.session_state.show_register = True
-
-    if st.session_state.get("show_login") or st.session_state.get("show_register"):
-        with st.form("auth_form"):
-            username = st.text_input("Username")
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Login / Register")
-            if submit:
-                user = db.conn.execute("SELECT * FROM users WHERE username=? OR email=?", (username, email)).fetchone()
-                if user and bcrypt.checkpw(password.encode(), user["password_hash"]):
-                    st.session_state.logged_in = True
-                    st.session_state.user_id = user["user_id"]
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials or user not found")
-
+    landing()
+    if st.session_state.get('show_2fa'):
+        code = st.text_input('Enter 2FA Code')
+        if st.button('Verify'):
+            if db.verify_2fa_code(st.session_state.temp_user['user_id'], code):
+                st.session_state.logged_in = True
+                st.session_state.user_id = st.session_state.temp_user['user_id']
+                st.session_state.user = st.session_state.temp_user
+                del st.session_state.temp_user
+                del st.session_state.show_2fa
+                st.rerun()
+            else: st.error('Invalid code')
 else:
-    menu = ["Chat Tutor", "Exam Prep", "Projects", "Progress", "PDF Q&A", "Settings", "Shop"]
-    if st.session_state.user.get("username") == "EmperorUnruly":
-        menu.append("Emperor Panel")
-    
-    choice = st.sidebar.radio("Navigate", menu)
-
-    if choice == "Exam Prep": exam_tab()
-    elif choice == "Chat Tutor": chat_tab()
-    elif choice == "Progress": progress_tab()
+    menu = ["Chat Tutor", "Progress", "Settings", "PDF Q&A", "Exam Prep", "Essay Grader", "Premium", "Shop", "Admin"]
+    if st.session_state.user.get('username') == 'EmperorUnruly': menu.append("Emperor Panel")
+    choice = st.sidebar.radio("Menu", menu)
+    if choice == "Chat Tutor": chat_tab()
     elif choice == "Settings": settings_tab()
     elif choice == "PDF Q&A": pdf_tab()
-    elif choice == "Projects": project_tab()
+    elif choice == "Progress": progress_tab()
+    elif choice == "Exam Prep": exam_tab()
+    elif choice == "Essay Grader": essay_tab()
     elif choice == "Shop": shop_page()
     elif choice == "Emperor Panel": emperor_panel()
+    elif choice == "Premium":
+        st.success("Send **KSh 600** (or **KSh 480 with 20% discount**) to **0701617120**")
+        if st.session_state.user.get('discount_20'): st.info("You have 20% discount! Pay only KSh 480")
+        with st.form("pay"):
+            phone = st.text_input("Phone")
+            code = st.text_input("M-Pesa Code")
+            if st.form_submit_button("Submit"):
+                db.add_payment(st.session_state.user_id, phone, code)
+                st.balloons()
+    else: st.info('Select a menu item')
