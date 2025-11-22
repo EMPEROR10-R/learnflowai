@@ -1,13 +1,14 @@
-# app.py — FULLY WORKING KENYAN EDTECH APP (2025) — ALL FEATURES
+# app.py — FULLY FIXED: Login/Register Works + Scalable + All Features Intact
 import streamlit as st
 import bcrypt
 import pandas as pd
 import qrcode
 import base64
+from io import BytesIO
 from database import Database
 from ai_engine import AIEngine
 from prompts import SUBJECT_PROMPTS, get_enhanced_prompt, EXAM_TYPES, BADGES
-from utils import Translator_Utils, cached_pdf_extract
+from utils import cached_pdf_extract
 
 st.set_page_config(page_title="Kenyan EdTech", layout="wide", initial_sidebar_state="expanded")
 
@@ -18,19 +19,28 @@ ai_engine = AIEngine(st.secrets.get("GEMINI_API_KEY", ""))
 
 XP_RULES = {"question_asked": 10, "pdf_question": 15, "2fa_enabled": 20}
 
+# ============= SESSION STATE INIT =============
 if "initialized" not in st.session_state:
     st.session_state.update({
-        "logged_in": False, "user_id": None, "user": None,
-        "chat_history": [], "pdf_text": "", "current_subject": "Mathematics",
-        "show_qr": False, "secret_key": None, "qr_code": None,
-        "show_2fa": False, "temp_user": None,
-        "questions": [], "user_answers": {},
-        "show_login_form": False, "show_register_form": False
+        "logged_in": False,
+        "user_id": None,
+        "user": None,
+        "chat_history": [],
+        "pdf_text": "",
+        "current_subject": "Mathematics",
+        "show_qr": False,
+        "secret_key": None,
+        "qr_code": None,
+        "show_2fa": False,
+        "temp_user": None,
+        "questions": [],
+        "user_answers": {},
+        "page": "landing",  # Critical fix: controls page flow
     })
 
-translator = Translator_Utils()
+translator = None  # Placeholder if needed later
 
-# ============= KENYAN HERO (100% SAFE) =============
+# ============= HERO SECTION =============
 st.markdown("""
 <style>
     .hero {background: linear-gradient(135deg, #000000, #006400, #FFD700, #B30000);
@@ -53,7 +63,7 @@ st.markdown("""
 def get_user():
     if st.session_state.user_id:
         st.session_state.user = db.get_user(st.session_state.user_id)
-    return st.session_state.user
+    return st.session_state.user or {}
 
 def award_xp(points, reason):
     if st.session_state.user_id:
@@ -61,91 +71,100 @@ def award_xp(points, reason):
         get_user()
         st.toast(f"+{points} XP — {reason}")
 
+# ============= PAGE CONTROLLER =============
+page = st.session_state.page
+
 # ============= LANDING PAGE =============
-def landing_page():
+if page == "landing" and not st.session_state.logged_in:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if st.button("LOGIN", use_container_width=True, key="landing_login"):
-            st.session_state.show_login_form = True
-            st.session_state.show_register_form = False
+        st.markdown("<h2 style='text-align: center;'>Welcome to Kenyan EdTech</h2>", unsafe_allow_html=True)
+        if st.button("LOGIN", use_container_width=True, type="primary"):
+            st.session_state.page = "login"
             st.rerun()
-        if st.button("REGISTER", use_container_width=True, key="landing_register"):
-            st.session_state.show_register_form = True
-            st.session_state.show_login_form = False
+        if st.button("REGISTER", use_container_width=True):
+            st.session_state.page = "register"
             st.rerun()
 
-    if st.session_state.show_login_form:
-        st.markdown("### Login to Your Account")
-        with st.form("login_form"):
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.form_submit_button("Login"):
-                    user = db.get_user_by_email(email)
-                    if user and bcrypt.checkpw(password.encode(), user["password_hash"]):
-                        st.session_state.temp_user = user
-                        st.session_state.show_2fa = db.is_2fa_enabled(user["user_id"])
-                        if not st.session_state.show_2fa:
-                            st.session_state.logged_in = True
-                            st.session_state.user_id = user["user_id"]
-                            st.rerun()
+# ============= LOGIN PAGE =============
+elif page == "login":
+    st.markdown("### Login to Your Account")
+    with st.form("login_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.form_submit_button("Login", use_container_width=True):
+                user = db.get_user_by_email(email)
+                if user and bcrypt.checkpw(password.encode(), user["password_hash"]):
+                    st.session_state.temp_user = user
+                    if db.is_2fa_enabled(user["user_id"]):
+                        st.session_state.show_2fa = True
+                        st.session_state.page = "2fa"
                     else:
-                        st.error("Invalid credentials")
-            with col2:
-                if st.form_submit_button("Back"):
-                    st.session_state.show_login_form = False
+                        st.session_state.logged_in = True
+                        st.session_state.user_id = user["user_id"]
+                        st.session_state.page = "main"
                     st.rerun()
+                else:
+                    st.error("Invalid email or password")
+        with col2:
+            if st.form_submit_button("Back to Home", use_container_width=True):
+                st.session_state.page = "landing"
+                st.rerun()
 
-    elif st.session_state.show_register_form:
-        st.markdown("### Create Account")
-        with st.form("register_form"):
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            confirm = st.text_input("Confirm Password", type="password")
-            if password != confirm:
-                st.error("Passwords do not match")
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.form_submit_button("Register"):
-                    if db.create_user(email, password):
-                        st.success("Account created! Please login.")
-                        st.session_state.show_login_form = True
-                        st.session_state.show_register_form = False
-                        st.rerun()
-                    else:
-                        st.error("Email already exists")
-            with col2:
-                if st.form_submit_button("Back"):
-                    st.session_state.show_register_form = False
+# ============= REGISTER PAGE =============
+elif page == "register":
+    st.markdown("### Create Your Account")
+    with st.form("register_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        confirm = st.text_input("Confirm Password", type="password")
+        if password != confirm:
+            st.error("Passwords do not match")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.form_submit_button("Register", use_container_width=True):
+                if db.create_user(email, password):
+                    st.success("Account created! Please login.")
+                    st.session_state.page = "login"
                     st.rerun()
+                else:
+                    st.error("Email already exists")
+        with col2:
+            if st.form_submit_button("Back", use_container_width=True):
+                st.session_state.page = "landing"
+                st.rerun()
 
-# ============= 2FA =============
-if st.session_state.get("show_2fa"):
+# ============= 2FA PAGE =============
+elif st.session_state.show_2fa or page == "2fa":
     st.header("Two-Factor Authentication")
-    code = st.text_input("Enter 6-digit code", key="2fa_input")
-    if st.button("Verify", key="verify_2fa"):
+    code = st.text_input("Enter 6-digit code from your app", max_chars=6)
+    if st.button("Verify Code", use_container_width=True):
         if db.verify_2fa_code(st.session_state.temp_user["user_id"], code):
             st.session_state.logged_in = True
             st.session_state.user_id = st.session_state.temp_user["user_id"]
-            del st.session_state.temp_user
-            del st.session_state.show_2fa
+            st.session_state.page = "main"
+            st.session_state.show_2fa = False
+            st.session_state.temp_user = None
+            st.success("Login successful!")
             st.rerun()
         else:
-            st.error("Invalid code")
+            st.error("Invalid or expired code")
 
-# ============= MAIN APP =============
-elif st.session_state.logged_in:
+# ============= MAIN APP (After Login) =============
+elif st.session_state.logged_in and page == "main":
     with st.sidebar:
         st.title("Kenyan EdTech")
         u = get_user()
-        st.write(f"**{u.get('username','Student')}**")
-        st.metric("Total XP", f"{u.get('total_xp',0):,}")
-        st.metric("Streak", f"{u.get('streak',0)} days")
-        if u.get('discount_20'): st.success("20% Discount Active!")
+        st.write(f"**{u.get('username', 'Student')}**")
+        st.metric("Total XP", f"{u.get('total_xp', 0):,}")
+        st.metric("Streak", f"{u.get('streak', 0)} days")
+        if u.get('discount_20'):
+            st.success("20% Discount Active!")
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-        "Chat Tutor", "Exam Prep", "PDF Q&A", "Progress", "Essay Grader", "Shop", "Premium", "Settings"
+        "Chat Tutor", "Exam Prep", "PDF Q&A", "Progress", "Essay Grader", "XP Shop", "Premium", "Settings"
     ])
 
     with tab1:
@@ -153,41 +172,52 @@ elif st.session_state.logged_in:
         subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()), key="subject_select")
         st.session_state.current_subject = subject
         for msg in st.session_state.chat_history:
-            st.chat_message(msg["role"]).write(msg["content"])
-        if prompt := st.chat_input("Ask anything..."):
-            with st.spinner("Thinking..."):
-                resp = ai_engine.generate_response(prompt, get_enhanced_prompt(subject, prompt))
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+        if prompt := st.chat_input("Ask anything about your studies..."):
+            with st.chat_message("user"):
+                st.write(prompt)
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    resp = ai_engine.generate_response(prompt, get_enhanced_prompt(subject, prompt))
+                    st.write(resp)
             st.session_state.chat_history.append({"role": "user", "content": prompt})
             st.session_state.chat_history.append({"role": "assistant", "content": resp})
-            award_xp(XP_RULES["question_asked"], "Question asked")
+            award_xp(XP_RULES["question_asked"], "Asked a question")
 
     with tab2:
         st.header("Exam Preparation")
-        exam = st.selectbox("Exam", list(EXAM_TYPES.keys()))
+        exam = st.selectbox("Exam Type", list(EXAM_TYPES.keys()))
         subject = st.selectbox("Subject", EXAM_TYPES[exam]["subjects"])
-        num = st.slider("Questions", 1, 50, 10)
-        if st.button("Generate Exam"):
-            questions = ai_engine.generate_exam_questions(subject, exam, num)
-            st.session_state.questions = questions
-            st.session_state.user_answers = {}
+        num = st.slider("Number of Questions", 1, 50, 10)
+        topic = st.text_input("Topic (Optional)", "")
+        if st.button("Generate Exam", use_container_width=True):
+            with st.spinner("Generating questions..."):
+                questions = ai_engine.generate_mcq_questions(subject, num, topic, exam)
+                st.session_state.questions = questions
+                st.session_state.user_answers = {}
+                st.success("Exam ready!")
+
         if st.session_state.questions:
             for i, q in enumerate(st.session_state.questions):
                 st.write(f"**Q{i+1}:** {q['question']}")
-                ans = st.radio("Choose answer", q["options"], key=f"q_{i}")
+                ans = st.radio("Select answer", q["options"], key=f"ans_{i}")
                 st.session_state.user_answers[i] = ans
-            if st.button("Submit Exam"):
+            if st.button("Submit Exam", use_container_width=True):
                 result = ai_engine.grade_mcq(st.session_state.questions, st.session_state.user_answers)
-                st.success(f"Score: {result['percentage']}%")
-                award_xp(int(result["percentage"]), "Exam")
+                st.success(f"Score: {result['percentage']}% ({result['correct']}/{result['total']})")
+                award_xp(int(result["percentage"] * 2), "Exam completed")
+                st.json(result["results"])
 
     with tab3:
         st.header("PDF Q&A")
-        uploaded = st.file_uploader("Upload PDF", type="pdf")
+        uploaded = st.file_uploader("Upload your notes or textbook (PDF)", type="pdf")
         if uploaded:
-            st.session_state.pdf_text = cached_pdf_extract(uploaded.getvalue(), uploaded.name)
-            st.success("PDF loaded!")
+            with st.spinner("Extracting text..."):
+                st.session_state.pdf_text = cached_pdf_extract(uploaded.getvalue(), uploaded.name)
+            st.success("PDF loaded! Ask questions below.")
             if q := st.chat_input("Ask about this PDF..."):
-                context = f"Document:\n{st.session_state.pdf_text[:12000]}"
+                context = f"Document content:\n{st.session_state.pdf_text[:12000]}"
                 resp = ai_engine.generate_response(q, get_enhanced_prompt("General", q, context=context))
                 st.write(resp)
                 award_xp(XP_RULES["pdf_question"], "PDF Question")
@@ -196,65 +226,74 @@ elif st.session_state.logged_in:
         st.header("Your Progress")
         u = get_user()
         st.metric("Total XP", u.get("total_xp", 0))
+        st.metric("Level", u.get("level", 1))
         lb = db.get_xp_leaderboard()
         if lb:
-            df = pd.DataFrame([{"Rank":i+1, "Email":r["email"], "XP":r["total_xp"]} for i,r in enumerate(lb)])
-            st.dataframe(df, hide_index=True)
+            df = pd.DataFrame([{"Rank": i+1, "Email": r["email"], "XP": r["total_xp"]} for i, r in enumerate(lb)])
+            st.dataframe(df, use_container_width=True, hide_index=True)
 
     with tab5:
         st.header("Essay Grader")
-        essay = st.text_area("Paste your essay")
-        if st.button("Grade Essay"):
-            result = ai_engine.grade_essay(essay, "KCSE Standard Rubric")
-            st.json(result, expanded=True)
+        essay = st.text_area("Paste your essay here", height=300)
+        if st.button("Grade My Essay"):
+            with st.spinner("Grading..."):
+                result = ai_engine.grade_essay(essay, "KCSE Essay Rubric (Structure, Content, Language)")
+                st.json(result, expanded=True)
 
     with tab6:
         st.header("XP Shop")
-        if st.button("Buy 20% Discount Cheque (500 XP Coins)"):
+        if st.button("Buy 20% Lifetime Discount (500 XP Coins)", use_container_width=True):
             if db.buy_discount_cheque(st.session_state.user_id):
                 st.balloons()
-                st.success("Discount Activated!")
+                st.success("20% Discount Activated Forever!")
             else:
                 st.error("Not enough XP Coins")
 
     with tab7:
         st.header("Go Premium")
         price = 480 if get_user().get("discount_20") else 600
-        st.success(f"Send **KSh {price}** to **0701617120**")
-        with st.form("premium_payment"):
-            phone = st.text_input("Your Phone")
-            code = st.text_input("M-Pesa Code")
-            if st.form_submit_button("Submit Payment"):
+        st.success(f"Send **KSh {price}** to **0701617120** (M-Pesa)")
+        with st.form("premium_form"):
+            phone = st.text_input("Your Phone Number")
+            code = st.text_input("M-Pesa Transaction Code")
+            submitted = st.form_submit_button("Submit Payment")
+            if submitted:
                 db.add_payment(st.session_state.user_id, phone, code)
-                st.success("Payment recorded! Waiting approval.")
+                st.success("Payment recorded! Waiting for approval.")
 
     with tab8:
-        st.header("Settings & 2FA")
-        if st.button("Enable 2FA"):
+        st.header("Settings & Security")
+        if st.button("Enable 2FA (Recommended)", use_container_width=True):
             secret, qr = db.enable_2fa(st.session_state.user_id)
+            buffered = BytesIO()
+            qr.save(buffered, format="PNG")
+            qr_img = base64.b64encode(buffered.getvalue()).decode()
+            st.session_state.qr_code = f"data:image/png;base64,{qr_img}"
             st.session_state.secret_key = secret
-            st.session_state.qr_code = qr
             st.session_state.show_qr = True
-            st.rerun()
+
         if st.session_state.show_qr:
             st.image(st.session_state.qr_code, width=200)
             st.code(st.session_state.secret_key)
-            code = st.text_input("Enter code to confirm")
-            if st.button("Confirm 2FA"):
+            code = st.text_input("Enter code from Authenticator app")
+            if st.button("Confirm 2FA Setup"):
                 if db.verify_2fa_code(st.session_state.user_id, code):
-                    st.success("2FA Enabled!")
-                    award_xp(20, "2FA Setup")
+                    st.success("2FA Enabled Successfully!")
+                    award_xp(20, "2FA Activated")
                     st.session_state.show_qr = False
                 else:
                     st.error("Invalid code")
 
         if get_user().get("username") == "EmperorUnruly":
-            st.subheader("Emperor Panel")
+            st.subheader("Admin Panel")
             for p in db.get_pending_payments():
                 st.write(f"User {p['user_id']} | Code: {p['mpesa_code']}")
-                if st.button("Approve", key=f"approve_{p['id']}"):
+                if st.button(f"Approve {p['id']}", key=f"approve_{p['id']}"):
                     db.approve_payment(p["id"])
+                    st.success("Approved!")
                     st.rerun()
 
 else:
-    landing_page()
+    # Fallback
+    st.session_state.page = "landing"
+    st.rerun()
