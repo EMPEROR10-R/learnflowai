@@ -1,4 +1,4 @@
-# app.py — FULLY FIXED: Login/Register Now Works Perfectly with Page State + No Refresh Issues + All Features Intact
+# app.py — UPDATED 2025: XP Bar + Infinite Exponential Levels + Global/Subject Leaderboards + XP Coins + Admin Control Center + Full Settings + Exam Topics + All Features Intact
 import streamlit as st
 import bcrypt
 import pandas as pd
@@ -79,7 +79,20 @@ def award_xp(points, reason):
     if st.session_state.user_id:
         db.add_xp(st.session_state.user_id, points)
         get_user()
-        st.toast(f"+{points} XP — {reason}")
+        st.toast(f"+{points} XP & Coins — {reason}")
+
+def calculate_level_progress(total_xp):
+    if total_xp == 0:
+        return 1, 0.0, 0, 100
+    level = 1
+    xp_needed = 100
+    current_xp = total_xp
+    while current_xp >= xp_needed:
+        current_xp -= xp_needed
+        level += 1
+        xp_needed = int(xp_needed * 1.5)  # Exponential increase
+    progress = current_xp / xp_needed
+    return level, progress, current_xp, xp_needed
 
 # ============= PAGE RENDERING =============
 if st.session_state.page == "landing" and not st.session_state.logged_in:
@@ -159,7 +172,12 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         st.title("Kenyan EdTech")
         u = get_user()
         st.write(f"**{u.get('username','Student')}**")
+        level, progress, current_xp, xp_needed = calculate_level_progress(u.get('total_xp', 0))
+        st.metric("Level", level)
+        st.progress(progress)
+        st.caption(f"{current_xp} / {xp_needed} XP to Level {level + 1}")
         st.metric("Total XP", f"{u.get('total_xp',0):,}")
+        st.metric("XP Coins", f"{u.get('xp_coins',0):,}")
         st.metric("Streak", f"{u.get('streak',0)} days")
         if u.get('discount_20'): st.success("20% Discount Active!")
 
@@ -185,9 +203,11 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         st.header("Exam Preparation")
         exam = st.selectbox("Exam", list(EXAM_TYPES.keys()))
         subject = st.selectbox("Subject", EXAM_TYPES[exam]["subjects"])
+        topics = EXAM_TYPES[exam]["topics"].get(subject, ["General"])
+        topic = st.selectbox("Topic", topics)
         num = st.slider("Questions", 1, 50, 10)
         if st.button("Generate Exam"):
-            questions = ai_engine.generate_exam_questions(subject, exam, num)
+            questions = ai_engine.generate_exam_questions(subject, exam, num, topic)
             st.session_state.questions = questions
             st.session_state.user_answers = {}
         if st.session_state.questions:
@@ -198,6 +218,7 @@ elif st.session_state.logged_in and st.session_state.page == "main":
             if st.button("Submit Exam"):
                 result = ai_engine.grade_mcq(st.session_state.questions, st.session_state.user_answers)
                 st.success(f"Score: {result['percentage']}%")
+                db.add_score(st.session_state.user_id, f'exam_{subject}', result['percentage'])
                 award_xp(int(result["percentage"]), "Exam")
 
     with tab3:
@@ -213,13 +234,25 @@ elif st.session_state.logged_in and st.session_state.page == "main":
                 award_xp(XP_RULES["pdf_question"], "PDF Question")
 
     with tab4:
-        st.header("Your Progress")
+        st.header("Your Progress & Leaderboards")
         u = get_user()
         st.metric("Total XP", u.get("total_xp", 0))
+        st.subheader("Global Level Leaderboard")
         lb = db.get_xp_leaderboard()
         if lb:
-            df = pd.DataFrame([{"Rank":i+1, "Email":r["email"], "XP":r["total_xp"]} for i,r in enumerate(lb)])
+            df = pd.DataFrame([{"Rank":i+1, "Email":r["email"], "XP":r["total_xp"], "Level": calculate_level_progress(r["total_xp"])[0]} for i,r in enumerate(lb)])
             st.dataframe(df, hide_index=True)
+        st.subheader("Subject Exam Leaderboards")
+        selected_subject = st.selectbox("Select Subject for Leaderboard", list(SUBJECT_PROMPTS.keys()))
+        subject_lb = db.get_leaderboard(f'exam_{selected_subject}')
+        if subject_lb:
+            df_subject = pd.DataFrame([{"Rank":i+1, "Email":r["email"], "Avg Score":r["score"]} for i,r in enumerate(subject_lb)])
+            st.dataframe(df_subject, hide_index=True)
+        st.subheader("Essay Grader Leaderboard")
+        essay_lb = db.get_leaderboard('essay')
+        if essay_lb:
+            df_essay = pd.DataFrame([{"Rank":i+1, "Email":r["email"], "Avg Score":r["score"]} for i,r in enumerate(essay_lb)])
+            st.dataframe(df_essay, hide_index=True)
 
     with tab5:
         st.header("Essay Grader")
@@ -227,9 +260,11 @@ elif st.session_state.logged_in and st.session_state.page == "main":
         if st.button("Grade Essay"):
             result = ai_engine.grade_essay(essay, "KCSE Standard Rubric")
             st.json(result, expanded=True)
+            db.add_score(st.session_state.user_id, 'essay', result['score'])
 
     with tab6:
         st.header("XP Shop")
+        st.metric("Your XP Coins", u.get('xp_coins', 0))
         if st.button("Buy 20% Discount Cheque (500 XP Coins)"):
             if db.buy_discount_cheque(st.session_state.user_id):
                 st.balloons()
@@ -239,17 +274,30 @@ elif st.session_state.logged_in and st.session_state.page == "main":
 
     with tab7:
         st.header("Go Premium")
-        price = 480 if get_user().get("discount_20") else 600
-        st.success(f"Send **KSh {price}** to **0701617120**")
-        with st.form("premium_payment"):
-            phone = st.text_input("Your Phone")
-            code = st.text_input("M-Pesa Code")
-            if st.form_submit_button("Submit Payment"):
-                db.add_payment(st.session_state.user_id, phone, code)
-                st.success("Payment recorded! Waiting approval.")
+        if u.get('is_premium', 0) == 0:
+            price = 480 if u.get("discount_20") else 600
+            st.success(f"Send **KSh {price}** to **0701617120**")
+            with st.form("premium_payment"):
+                phone = st.text_input("Your Phone")
+                code = st.text_input("M-Pesa Code")
+                if st.form_submit_button("Submit Payment"):
+                    db.add_payment(st.session_state.user_id, phone, code)
+                    st.success("Payment recorded! Waiting approval.")
+        else:
+            st.success("You are already Premium!")
 
     with tab8:
-        st.header("Settings & 2FA")
+        st.header("Settings & Account Management")
+        with st.form("update_password"):
+            new_pass = st.text_input("New Password", type="password")
+            confirm = st.text_input("Confirm New Password", type="password")
+            if st.form_submit_button("Update Password"):
+                if new_pass == confirm:
+                    db.update_password(st.session_state.user_id, new_pass)
+                    st.success("Password updated!")
+                else:
+                    st.error("Passwords do not match")
+        st.subheader("2FA Setup")
         if st.button("Enable 2FA"):
             secret, qr = db.enable_2fa(st.session_state.user_id)
             buffered = BytesIO()
@@ -271,7 +319,22 @@ elif st.session_state.logged_in and st.session_state.page == "main":
                     st.error("Invalid code")
 
         if get_user().get("username") == "EmperorUnruly":
-            st.subheader("Emperor Panel")
+            st.subheader("Admin Control Center")
+            st.write("Manage Users & Payments")
+            all_users = db.get_all_users()
+            for user in all_users:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.write(f"User: {user['email']} (ID: {user['user_id']})")
+                with col2:
+                    if st.button("Ban", key=f"ban_{user['user_id']}"):
+                        db.ban_user(user['user_id'])
+                        st.rerun()
+                with col3:
+                    if st.button("Unban", key=f"unban_{user['user_id']}"):
+                        db.unban_user(user['user_id'])
+                        st.rerun()
+            st.subheader("Pending Payments")
             for p in db.get_pending_payments():
                 st.write(f"User {p['user_id']} | Code: {p['mpesa_code']}")
                 if st.button("Approve", key=f"approve_{p['id']}"):
