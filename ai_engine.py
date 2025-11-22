@@ -1,36 +1,21 @@
-# ai_engine.py
+# ai_engine.py — Updated with project grading, max questions=100, topic focus
 import json
 import time
 import requests
 from streamlit import cache_data
 from typing import List, Dict
 import io
-import PyPDF2  # Pure-Python PDF reader
-
-# ==============================================================================
-# API CONFIGURATION
-# ==============================================================================
+import PyPDF2
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
-
-# Chat / streaming – stable, fast, free tier
 GEMINI_CHAT_MODEL = "gemini-1.5-flash"
-
-# Structured JSON (exam, grading) – reliable fallback
 GEMINI_STRUCTURED_MODEL = "gemini-1.5-flash"
-
-# ==============================================================================
-# AI ENGINE CLASS
-# ==============================================================================
 
 class AIEngine:
     def __init__(self, gemini_key: str, hf_key: str = ""):
         self.gemini_key = gemini_key or ""
-        self.hf_key = hf_key or ""  # kept for compatibility
+        self.hf_key = hf_key or ""
 
-    # --------------------------------------------------------------------------
-    # Low-level request with back-off + detailed logging
-    # --------------------------------------------------------------------------
     def _api_call(self, url: str, payload: dict, headers: dict | None = None,
                   params: dict | None = None, stream: bool = False, max_retries: int = 5):
         headers = headers or {"Content-Type": "application/json"}
@@ -65,12 +50,8 @@ class AIEngine:
                     raise Exception(f"Request failed: {e}")
                 time.sleep(2 ** attempt)
 
-    # --------------------------------------------------------------------------
-    # PDF → TEXT (LOCAL with PyPDF2) – NO C extensions, works on Streamlit Cloud
-    # --------------------------------------------------------------------------
     @cache_data(ttl="2h", show_spinner="Extracting PDF…")
     def extract_text_from_pdf(_self, pdf_bytes: bytes) -> str:
-        """Extract text using PyPDF2 – pure Python, no system deps."""
         try:
             pdf_file = io.BytesIO(pdf_bytes)
             reader = PyPDF2.PdfReader(pdf_file)
@@ -83,9 +64,6 @@ class AIEngine:
         except Exception as e:
             return f"Error extracting PDF: {e}"
 
-    # --------------------------------------------------------------------------
-    # GEMINI CHAT (NON-STREAMING)
-    # --------------------------------------------------------------------------
     def generate_response_gemini(self, contents: List[Dict], system_prompt: str, use_grounding: bool = False) -> str:
         if not self.gemini_key:
             return "AI is not configured. Contact admin."
@@ -129,16 +107,11 @@ class AIEngine:
             print(f"Gemini chat error: {e}")
             return "Sorry, the AI could not answer right now. (Check console.)"
 
-    # --------------------------------------------------------------------------
-    # PUBLIC HELPERS
-    # --------------------------------------------------------------------------
     def generate_response(self, user_query: str, system_prompt: str) -> str:
-        """Single-turn chat."""
         contents = [{"role": "user", "parts": [{"text": user_query}]}]
         return self.generate_response_gemini(contents, system_prompt)
 
     def stream_response(self, user_query: str, system_prompt: str):
-        """Streaming chat – falls back to non-stream if needed."""
         if not self.gemini_key:
             mock = f"Hint for «{user_query[:30]}…» – think step-by-step."
             for i in range(0, len(mock), 12):
@@ -149,12 +122,10 @@ class AIEngine:
         for chunk in [full[i:i + 50] for i in range(0, len(full), 50)]:
             yield chunk
 
-    # --------------------------------------------------------------------------
-    # ENHANCED: MULTIPLE-CHOICE QUIZ GENERATION
-    # --------------------------------------------------------------------------
-    def generate_mcq_questions(self, subject: str, num_questions: int = 5) -> List[Dict]:
+    def generate_mcq_questions(self, subject: str, num_questions: int = 5, topic: str = "", exam_type: str = "") -> List[Dict]:
+        num_questions = min(num_questions, 100)  # Max 100
         prompt = f"""
-Generate {num_questions} multiple-choice questions for {subject} (KCSE level).
+Generate {num_questions} multiple-choice questions for {subject} (KCSE level, topic: {topic or 'general'}, exam: {exam_type}).
 Each question must have:
 - 1 clear question
 - 4 options (A, B, C, D) — exactly one correct
@@ -172,7 +143,6 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
 ]
 """
         try:
-            # Use grounding for potentially factual/current affairs subjects for accuracy
             use_grounding = subject in ["History and Government", "Geography", "Business Studies"]
             response = self.generate_response_gemini([{"role": "user", "parts": [{"text": prompt}]}], 
                                                      "You are a quiz generator. Output only JSON.", 
@@ -196,9 +166,6 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
                 }
             ][:num_questions]
 
-    # --------------------------------------------------------------------------
-    # ENHANCED: GRADE MCQ
-    # --------------------------------------------------------------------------
     def grade_mcq(self, questions: List[Dict], user_answers: Dict[int, str]) -> Dict:
         correct = 0
         total_score = 0
@@ -208,10 +175,6 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
             correct_ans = q["correct_answer"].strip()
             is_correct = user_ans == correct_ans
             score = 100 if is_correct else 0
-            
-            # Simplified partial grading fallback, rely only on AI grading for complex tasks.
-            # Removed the partial grading AI call for simplicity/speed in this context.
-            
             total_score += score
             if is_correct:
                 correct += 1
@@ -231,12 +194,9 @@ Use Kenyan curriculum examples. Output **only valid JSON** like this:
             "results": results
         }
 
-    # --------------------------------------------------------------------------
-    # EXAM / GRADING / SUMMARY
-    # --------------------------------------------------------------------------
-    def generate_exam_questions(self, subject, exam_type, num_questions):
-        # Can be enhanced later to use exam_type for question style
-        return self.generate_mcq_questions(subject, num_questions)
+    def generate_exam_questions(self, subject, exam_type, num_questions, topic=""):
+        num_questions = min(num_questions, 100)
+        return self.generate_mcq_questions(subject, num_questions, topic, exam_type)
 
     def grade_short_answer(self, question, model_answer, user_answer):
         prompt = f"""
@@ -272,6 +232,23 @@ Output **only JSON**: {{"score": int, "feedback": "Detailed strengths/weaknesses
         except Exception as e:
             print(f"Essay grading error: {e}")
             return {"score": 50, "feedback": "Fallback: Average effort; improve details. (AI Grading Error)"}
+
+    def grade_project(self, subject: str, project_name: str, submission: str) -> Dict:
+        prompt = f"""
+Grade this project submission for {subject} - {project_name}:
+Submission: {submission}
+
+**Instruction:** Score 0-100 on creativity, correctness, Kenyan relevance, and completeness. Suggest XP award (50-300 based on quality).
+Output **only JSON**: {{"score": int, "feedback": "Detailed review.", "xp": int}}
+"""
+        try:
+            response = self.generate_response(prompt, "You are a project grader for Kenyan EdTech. Be encouraging.")
+            json_str = response.strip().replace("```json", "").replace("```", "")
+            result = json.loads(json_str)
+            return result
+        except Exception as e:
+            print(f"Project grading error: {e}")
+            return {"score": 50, "feedback": "Average project.", "xp": 100}
 
     def summarize_text_hf(self, text: str) -> str:
         return "Summary not available (HF disabled)."

@@ -1,4 +1,4 @@
-# utils.py
+# utils.py — Updated with voice input fully enabled
 import PyPDF2
 import io
 from typing import Optional, List
@@ -8,7 +8,6 @@ import nltk
 import re
 import pathlib
 
-# NLTK setup (safe, no crashes)
 _nltk_data = pathlib.Path(__file__).parent / "nltk_data"
 if _nltk_data.exists():
     nltk.data.path.append(str(_nltk_data))
@@ -64,7 +63,8 @@ class Translator_Utils:
             'zh-cn': 'Chinese (Simplified)', 'ja': 'Japanese', 'ko': 'Korean',
             'ar': 'Arabic', 'hi': 'Hindi', 'pt': 'Portuguese', 'ru': 'Russian',
             'it': 'Italian', 'nl': 'Dutch', 'pl': 'Polish', 'tr': 'Turkish',
-            'vi': 'Vietnamese', 'th': 'Thai', 'sv': 'Swedish', 'da': 'Danish', 'fi': 'Finnish'
+            'vi': 'Vietnamese', 'th': 'Thai', 'sv': 'Swedish', 'da': 'Danish', 'fi': 'Finnish',
+            'sw': 'Kiswahili'  # Added Kiswahili
         }
     
     def translate_text(self, text: str, target_lang: str = 'en', source_lang: str = 'auto') -> str:
@@ -83,8 +83,6 @@ class Translator_Utils:
             return detection.lang
         except:
             return 'en'
-
-# Removed EssayGrader class to unify grading logic via AI_Engine.grade_essay
 
 class VoiceInputHelper:
     @staticmethod
