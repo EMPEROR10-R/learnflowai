@@ -1,4 +1,4 @@
-# app.py — FULLY FIXED: Login/Register Buttons Now Work Without Refresh Issues + All Features Intact + Scalable
+# app.py — FULLY FIXED: Login/Register Now Works Perfectly with Page State + No Refresh Issues + All Features Intact
 import streamlit as st
 import bcrypt
 import pandas as pd
@@ -19,15 +19,34 @@ ai_engine = AIEngine(st.secrets.get("GEMINI_API_KEY", ""))
 
 XP_RULES = {"question_asked": 10, "pdf_question": 15, "2fa_enabled": 20}
 
-if "initialized" not in st.session_state:
-    st.session_state.update({
-        "logged_in": False, "user_id": None, "user": None,
-        "chat_history": [], "pdf_text": "", "current_subject": "Mathematics",
-        "show_qr": False, "secret_key": None, "qr_code": None,
-        "show_2fa": False, "temp_user": None,
-        "questions": [], "user_answers": {},
-        "show_login_form": False, "show_register_form": False
-    })
+if "page" not in st.session_state:
+    st.session_state.page = "landing"
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "user_id" not in st.session_state:
+    st.session_state.user_id = None
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "pdf_text" not in st.session_state:
+    st.session_state.pdf_text = ""
+if "current_subject" not in st.session_state:
+    st.session_state.current_subject = "Mathematics"
+if "show_qr" not in st.session_state:
+    st.session_state.show_qr = False
+if "secret_key" not in st.session_state:
+    st.session_state.secret_key = None
+if "qr_code" not in st.session_state:
+    st.session_state.qr_code = None
+if "show_2fa" not in st.session_state:
+    st.session_state.show_2fa = False
+if "temp_user" not in st.session_state:
+    st.session_state.temp_user = None
+if "questions" not in st.session_state:
+    st.session_state.questions = []
+if "user_answers" not in st.session_state:
+    st.session_state.user_answers = {}
 
 translator = Translator_Utils()
 
@@ -62,22 +81,80 @@ def award_xp(points, reason):
         get_user()
         st.toast(f"+{points} XP — {reason}")
 
-# ============= LANDING PAGE =============
-def landing_page():
+# ============= PAGE RENDERING =============
+if st.session_state.page == "landing" and not st.session_state.logged_in:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("LOGIN", use_container_width=True, key="landing_login", type="primary"):
-            st.session_state.show_login_form = True
-            st.session_state.show_register_form = False
+            st.session_state.page = "login"
             st.rerun()
         if st.button("REGISTER", use_container_width=True, key="landing_register"):
-            st.session_state.show_register_form = True
-            st.session_state.show_login_form = False
+            st.session_state.page = "register"
             st.rerun()
 
-# ============= MAIN LOGIC =============
-if st.session_state.logged_in:
-    # Main app after login
+elif st.session_state.page == "login":
+    st.markdown("### Login to Your Account")
+    with st.form("login_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.form_submit_button("Login"):
+                user = db.get_user_by_email(email)
+                if user and bcrypt.checkpw(password.encode(), user["password_hash"]):
+                    st.session_state.temp_user = user
+                    if db.is_2fa_enabled(user["user_id"]):
+                        st.session_state.show_2fa = True
+                        st.session_state.page = "2fa"
+                    else:
+                        st.session_state.logged_in = True
+                        st.session_state.user_id = user["user_id"]
+                        st.session_state.page = "main"
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials")
+        with col2:
+            if st.form_submit_button("Back"):
+                st.session_state.page = "landing"
+                st.rerun()
+
+elif st.session_state.page == "register":
+    st.markdown("### Create Account")
+    with st.form("register_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        confirm = st.text_input("Confirm Password", type="password")
+        if password != confirm and password:
+            st.error("Passwords do not match")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.form_submit_button("Register"):
+                if db.create_user(email, password):
+                    st.success("Account created! Please login.")
+                    st.session_state.page = "login"
+                    st.rerun()
+                else:
+                    st.error("Email already exists")
+        with col2:
+            if st.form_submit_button("Back"):
+                st.session_state.page = "landing"
+                st.rerun()
+
+elif st.session_state.page == "2fa":
+    st.header("Two-Factor Authentication")
+    code = st.text_input("Enter 6-digit code", key="2fa_input")
+    if st.button("Verify", key="verify_2fa"):
+        if db.verify_2fa_code(st.session_state.temp_user["user_id"], code):
+            st.session_state.logged_in = True
+            st.session_state.user_id = st.session_state.temp_user["user_id"]
+            del st.session_state.temp_user
+            st.session_state.show_2fa = False
+            st.session_state.page = "main"
+            st.rerun()
+        else:
+            st.error("Invalid code")
+
+elif st.session_state.logged_in and st.session_state.page == "main":
     with st.sidebar:
         st.title("Kenyan EdTech")
         u = get_user()
@@ -201,71 +278,6 @@ if st.session_state.logged_in:
                     db.approve_payment(p["id"])
                     st.rerun()
 
-elif st.session_state.show_2fa:
-    # 2FA verification page
-    st.header("Two-Factor Authentication")
-    code = st.text_input("Enter 6-digit code", key="2fa_input")
-    if st.button("Verify", key="verify_2fa"):
-        if db.verify_2fa_code(st.session_state.temp_user["user_id"], code):
-            st.session_state.logged_in = True
-            st.session_state.user_id = st.session_state.temp_user["user_id"]
-            del st.session_state.temp_user
-            st.session_state.show_2fa = False
-            st.session_state.show_login_form = False
-            st.rerun()
-        else:
-            st.error("Invalid code")
-
 else:
-    # Landing, Login, Register logic
-    if st.session_state.show_login_form:
-        st.markdown("### Login to Your Account")
-        with st.form("login_form"):
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            col1, col2 = st.columns(2)
-            with col1:
-                submitted = st.form_submit_button("Login")
-                if submitted:
-                    user = db.get_user_by_email(email)
-                    if user and bcrypt.checkpw(password.encode(), user["password_hash"]):
-                        st.session_state.temp_user = user
-                        st.session_state.show_2fa = db.is_2fa_enabled(user["user_id"])
-                        if not st.session_state.show_2fa:
-                            st.session_state.logged_in = True
-                            st.session_state.user_id = user["user_id"]
-                            st.session_state.show_login_form = False
-                        st.rerun()
-                    else:
-                        st.error("Invalid credentials")
-            with col2:
-                if st.form_submit_button("Back"):
-                    st.session_state.show_login_form = False
-                    st.rerun()
-
-    elif st.session_state.show_register_form:
-        st.markdown("### Create Account")
-        with st.form("register_form"):
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            confirm = st.text_input("Confirm Password", type="password")
-            if password != confirm and password:
-                st.error("Passwords do not match")
-            col1, col2 = st.columns(2)
-            with col1:
-                submitted = st.form_submit_button("Register")
-                if submitted:
-                    if db.create_user(email, password):
-                        st.success("Account created! Please login.")
-                        st.session_state.show_register_form = False
-                        st.session_state.show_login_form = True
-                        st.rerun()
-                    else:
-                        st.error("Email already exists")
-            with col2:
-                if st.form_submit_button("Back"):
-                    st.session_state.show_register_form = False
-                    st.rerun()
-
-    else:
-        landing_page()
+    st.session_state.page = "landing"
+    st.rerun()
