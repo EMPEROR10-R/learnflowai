@@ -1,4 +1,4 @@
-# database.py — FINAL 2025 | Shop Purchases + Daily Limits + All Features
+# database.py — FINAL 2025 | Leaderboards + Projects + Shop + All Features
 import sqlite3
 import bcrypt
 from datetime import datetime, timedelta
@@ -34,6 +34,26 @@ class Database:
             extra_ai_uses INTEGER DEFAULT 0,
             profile_theme TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS exam_scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            exam_type TEXT,
+            subject TEXT,
+            score REAL,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            subject TEXT,
+            title TEXT,
+            description TEXT,
+            grade REAL,
+            feedback TEXT,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS purchases (
@@ -97,6 +117,49 @@ class Database:
     def log_purchase(self, user_id, item_name, price):
         self.conn.execute("INSERT INTO purchases (user_id, item_name, price_paid) VALUES (?, ?, ?)", (user_id, item_name, price))
         self.conn.commit()
+
+    def submit_project(self, user_id, subject, title, description):
+        self.conn.execute("INSERT INTO projects (user_id, subject, title, description) VALUES (?, ?, ?, ?)",
+                          (user_id, subject, title, description))
+        self.conn.commit()
+
+    def get_pending_projects(self):
+        rows = self.conn.execute("SELECT p.*, u.email, u.username FROM projects p JOIN users u ON p.user_id = u.user_id WHERE p.grade IS NULL").fetchall()
+        return [dict(row) for row in rows]
+
+    def grade_project(self, project_id, grade, feedback):
+        self.conn.execute("UPDATE projects SET grade=?, feedback=? WHERE id=?", (grade, feedback, project_id))
+        self.conn.commit()
+
+    def get_user_projects(self, user_id):
+        rows = self.conn.execute("SELECT * FROM projects WHERE user_id=? ORDER BY timestamp DESC", (user_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    # Leaderboards
+    def get_leaderboard(self, metric="total_xp", limit=20):
+        valid_metrics = ["total_xp", "xp_coins", "level"]
+        if metric not in valid_metrics:
+            metric = "total_xp"
+        rows = self.conn.execute(f"""
+            SELECT username, email, {metric}, custom_badge 
+            FROM users 
+            WHERE is_banned=0 
+            ORDER BY {metric} DESC 
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in rows]
+
+    def get_subject_leaderboard(self, subject, limit=20):
+        rows = self.conn.execute("""
+            SELECT u.username, u.email, AVG(e.score) as avg_score, u.custom_badge
+            FROM exam_scores e
+            JOIN users u ON e.user_id = u.user_id
+            WHERE e.subject = ? AND u.is_banned=0
+            GROUP BY u.user_id
+            ORDER BY avg_score DESC
+            LIMIT ?
+        """, (subject, limit))
+        return [dict(row) for row in rows]
 
     def add_payment(self, user_id, phone, code):
         self.conn.execute("INSERT INTO payments (user_id, phone, mpesa_code) VALUES (?, ?, ?)", (user_id, phone, code))
