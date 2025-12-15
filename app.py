@@ -1,344 +1,258 @@
-# app.py — FINAL 2025 | ZERO ERRORS | AI WORKS | PROGRESS TRACKING | EXPONENTIAL SHOP
+# app.py — KENYAN EDTECH FINAL 2025 | PERFECTED | RICH XP SHOP | ALL SUBJECTS
 import streamlit as st
 import bcrypt
 import pandas as pd
-import json
-from io import BytesIO
-import PyPDF2
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
+from database import Database
+from ai_engine import AIEngine
+from prompts import EXAM_TYPES, SUBJECT_PROMPTS
 
-# ======================== DATABASE ========================
-if "db" not in st.session_state:
-    st.session_state.db = {
-        "users": {},
-        "payments": [],
-        "progress": {}  # Stores premium learning activity
-    }
+st.set_page_config(page_title="Kenyan EdTech", layout="wide", initial_sidebar_state="expanded")
 
-db = st.session_state.db
+# ======================== INIT ========================
+db = Database()
+db.auto_downgrade()
+ai_engine = AIEngine()
 
-# Create your Emperor account (only once)
-if "kingmumo15@gmail.com" not in db["users"]:
-    db["users"]["kingmumo15@gmail.com"] = {
-        "user_id": 1,
-        "email": "kingmumo15@gmail.com",
-        "password_hash": bcrypt.hashpw("@Unruly10".encode(), bcrypt.gensalt()),
-        "username": "EmperorUnruly",
-        "level": 999,
-        "xp_coins": 9999999,
-        "total_xp": 9999999,
-        "is_emperor": True,
-        "is_premium": False,
-        "premium_expiry": None,
-        "is_banned": False,
-        "buy_counts": {}
-    }
-
-# ======================== AI ENGINE — PROXIES ERROR FIXED FOREVER ========================
-class AIEngine:
-    def __init__(self):
-        key = st.secrets.get("OPENAI_API_KEY")
-        if not key:
-            st.error("OPENAI_API_KEY not in Streamlit Secrets!")
-            self.client = None
-            return
-        try:
-            from openai import OpenAI
-            # THIS LINE KILLS THE PROXIES ERROR
-            self.client = OpenAI(api_key=key)
-            st.success("AI Connected – gpt-4o-mini")
-        except Exception as e:
-            st.error(f"OpenAI Error: {e}")
-            self.client = None
-
-    def ask(self, prompt):
-        if not self.client:
-            return "AI offline — check your OpenAI key"
-        try:
-            resp = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                timeout=30
-            )
-            return resp.choices[0].message.content.strip()
-        except Exception as e:
-            return f"AI Error: {e}"
-
-    def generate_questions(self, subject, exam, count, topic):
-        prompt = f"Generate exactly {count} MCQs for {exam} {subject} on '{topic}'. Kenyan curriculum. 4 options A-D. Output ONLY valid JSON array."
-        try:
-            text = self.ask(prompt)
-            text = text.replace("```json","").replace("```","").strip()
-            return json.loads(text)
-        except:
-            return [{"question": f"{topic} Q{i+1}", "options": ["A: Correct", "B: Wrong", "C: Maybe", "D: None"], "answer": "A: Correct"} for i in range(10)]
-
-ai = AIEngine()
-
-# ======================== SESSION STATE ========================
-for k, v in {
-    "logged_in": False, "user": None, "page": "home",
+# Session state
+for key, default in {
+    "logged_in": False, "user_id": None, "user": None, "page": "landing",
     "chat_history": [], "questions": [], "user_answers": {}, "pdf_text": ""
 }.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+    if key not in st.session_state:
+        st.session_state[key] = default
 
-# ======================== SUBJECTS & TOPICS ========================
-EXAMS = ["Grade 6 KPSEA", "Grade 9 KJSEA", "KCSE 2025"]
-SUBJECTS = {
-    "Grade 6 KPSEA": ["Mathematics", "English", "Kiswahili", "Integrated Science"],
-    "Grade 9 KJSEA": ["Mathematics", "English", "Kiswahili", "Biology", "Physics"],
-    "KCSE 2025": ["Mathematics", "English", "Kiswahili", "Biology", "Physics", "Chemistry", "History", "Geography", "CRE", "Computer Studies", "Python Programming"]
-}
-TOPICS = {
-    "Mathematics": ["Algebra", "Geometry", "Statistics", "Fractions"],
-    "English": ["Comprehension", "Grammar", "Essay", "Oral"],
-    "Python Programming": ["Variables", "Loops", "Functions", "OOP", "Files"],
-    "Biology": ["Cells", "Genetics", "Ecology"]
-}
-for exam in EXAMS:
-    for sub in SUBJECTS[exam]:
-        if sub not in TOPICS:
-            TOPICS[sub] = ["General", "Past Papers", "Hard"]
+# ======================== STYLE ========================
+st.markdown("""
+<style>
+    .hero {background: linear-gradient(135deg, #000, #006400, #FFD700, #C00);
+           padding: 100px; border-radius: 25px; text-align: center; margin: -90px auto 40px;}
+    .title {font-size: 5.5rem; color: gold; font-weight: bold;}
+    .subtitle {font-size: 2.5rem; color: white;}
+    .shop-card {background: #111; padding: 20px; border-radius: 15px; margin: 10px 0; border: 2px solid gold;}
+</style>
+<div class="hero">
+    <h1 class="title">KENYAN EDTECH</h1>
+    <p class="subtitle">Kenya's #1 AI Exam Prep Platform</p>
+</div>
+""", unsafe_allow_html=True)
 
-# ======================== LANDING PAGE ========================
-def landing():
-    st.markdown("""
-    <style>
-    .hero{background:linear-gradient(135deg,#000,#006400,#c00,#FFD700);padding:120px 20px;text-align:center;border-radius:30px;margin:-100px auto 50px;box-shadow:0 0 40px gold;animation:g 8s infinite}
-    @keyframes g{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
-    .t{font-size:6rem;color:gold;font-weight:bold}
-    </style>
-    <div class="hero"><h1 class="t">KENYAN EDTECH</h1><p style="font-size:2.5rem;color:white">#1 AI Exam App</p></div>
-    """, unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1,2,1])
-    with c2:
-        if st.button("LOGIN", use_container_width=True, type="primary"):
-            st.session_state.page = "login"
-            st.rerun()
-        if st.button("REGISTER FREE", use_container_width=True):
-            st.session_state.page = "register"
-            st.rerun()
+# ======================== HELPERS ========================
+def get_user():
+    if st.session_state.user_id:
+        st.session_state.user = db.get_user(st.session_state.user_id)
+    return st.session_state.user
 
-# ======================== LOGIN / REGISTER ========================
+def award_xp(points, reason):
+    if st.session_state.user_id:
+        db.add_xp(st.session_state.user_id, points)
+        get_user()
+        st.toast(f"+{points} XP & Coins — {reason}", icon="🎉")
+
+# ======================== AUTH ========================
 if not st.session_state.logged_in:
-    if st.session_state.page == "login":
+    if st.session_state.page == "landing":
+        col1, col2, col3 = st.columns([1,2,1])
+        with col2:
+            if st.button("LOGIN", use_container_width=True, type="primary"):
+                st.session_state.page = "login"; st.rerun()
+            if st.button("REGISTER FREE", use_container_width=True):
+                st.session_state.page = "register"; st.rerun()
+
+    elif st.session_state.page == "login":
         st.title("Login")
         with st.form("login"):
             email = st.text_input("Email")
             pwd = st.text_input("Password", type="password")
             if st.form_submit_button("Login"):
-                u = db["users"].get(email.lower())
-                if u and bcrypt.checkpw(pwd.encode(), u["password_hash"]):
+                user = db.get_user_by_email(email)
+                if user and bcrypt.checkpw(pwd.encode(), user["password_hash"]):
                     st.session_state.logged_in = True
-                    st.session_state.user = u
+                    st.session_state.user_id = user["user_id"]
+                    st.session_state.user = user
                     st.rerun()
                 else:
-                    st.error("Wrong credentials")
+                    st.error("Invalid credentials")
+
     elif st.session_state.page == "register":
         st.title("Register")
-        with st.form("reg"):
+        with st.form("register"):
             email = st.text_input("Email")
             pwd = st.text_input("Password", type="password")
-            if st.form_submit_button("Create"):
-                if email and pwd and email.lower() not in db["users"]:
-                    db["users"][email.lower()] = {
-                        "user_id": len(db["users"])+1, "email": email.lower(),
-                        "password_hash": bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()),
-                        "username": email.split("@")[0], "level": 1, "xp_coins": 100, "total_xp": 100,
-                        "is_emperor": False, "is_premium": False, "premium_expiry": None,
-                        "buy_counts": {}
-                    }
-                    st.success("Created!")
+            confirm = st.text_input("Confirm Password", type="password")
+            if pwd != confirm and pwd:
+                st.error("Passwords do not match")
+            if st.form_submit_button("Create Account"):
+                if db.create_user(email, pwd):
+                    st.success("Account created! Login now.")
                     st.session_state.page = "login"
                     st.rerun()
-    else:
-        landing()
+                else:
+                    st.error("Email already exists")
+
 else:
-    user = st.session_state.user
-    is_emperor = user.get("is_emperor", False)
-
-    # Level from XP
-    xp = user.get("total_xp", 0)
-    level = 1
-    needed = 100
-    while xp >= needed:
-        xp -= needed
-        level += 1
-        needed = int(needed * 1.2)
-    user["level"] = level
-
-    # Auto downgrade premium
-    if not is_emperor and user.get("premium_expiry"):
-        if datetime.fromisoformat(user["premium_expiry"]) < datetime.now():
-            user["is_premium"] = False
-            user["premium_expiry"] = None
+    user = get_user()
+    is_emperor = user["email"] == "kingmumo15@gmail.com"
 
     # Sidebar
     with st.sidebar:
-        st.image("https://flagcdn.com/w320/ke.png", width=100)
-        st.success(f"**{user.get('username','Student')}**")
-        st.metric("Level", user["level"])
-        st.metric("XP Coins", f"{user.get('xp_coins',0):,}")
+        st.success(f"Welcome, {user['username'] or user['email'].split('@')[0]}")
+        st.metric("Level", user.get("level", 1))
+        st.metric("XP Coins", f"{user.get('xp_coins', 0):,}")
         if is_emperor:
             st.balloons()
-            st.success("EMPEROR — FULL CONTROL")
+            st.success("EMPEROR MODE")
         elif user.get("is_premium"):
             st.info("Premium Active")
-        else:
-            st.warning("Basic Account")
         if st.button("Logout"):
             st.session_state.clear()
             st.rerun()
 
-    # Tabs
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "AI Tutor", "Exam Prep", "PDF Q&A", "Progress", "XP Shop", "Premium", "Admin"
     ])
 
     with tab1:
         st.header("AI Tutor")
-        subject = st.selectbox("Subject", SUBJECTS["KCSE 2025"])
-        for m in st.session_state.chat_history:
-            st.chat_message(m["role"]).write(m["content"])
-        if q := st.chat_input("Ask anything..."):
-            st.session_state.chat_history.append({"role":"user","content":q})
+        subject = st.selectbox("Subject", list(SUBJECT_PROMPTS.keys()))
+        for msg in st.session_state.chat_history:
+            st.chat_message(msg["role"]).write(msg["content"])
+        if prompt := st.chat_input("Ask anything..."):
+            st.session_state.chat_history.append({"role": "user", "content": prompt})
             with st.chat_message("assistant"):
-                r = ai.ask(q + f" (Subject: {subject}, Kenyan curriculum)")
-                st.write(r)
-            st.session_state.chat_history.append({"role":"assistant","content":r})
-            user["total_xp"] += 10
-            user["xp_coins"] += 10
+                with st.spinner("Thinking..."):
+                    response = ai_engine.generate_response(prompt, SUBJECT_PROMPTS[subject])
+                st.write(response)
+            st.session_state.chat_history.append({"role": "assistant", "content": response})
+            award_xp(10, "AI Question")
 
     with tab2:
-        st.header("Exam Practice")
-        exam = st.selectbox("Exam", EXAMS)
-        subject = st.selectbox("Subject", SUBJECTS[exam])
-        topic = st.selectbox("Topic", TOPICS.get(subject, ["General"]))
-        count = st.slider("Questions", 10, 50, 25)
-        if st.button("Generate Exam"):
-            with st.spinner():
-                st.session_state.questions = ai.generate_questions(subject, exam, count, topic)
-                st.session_state.user_answers = {}
+        st.header("Exam Practice — Fresh AI Questions")
+        exam = st.selectbox("Exam", ["KPSEA", "KJSEA", "KCSE"])
+        subjects = EXAM_TYPES[exam]["subjects"]
+        subject = st.selectbox("Subject", subjects)
+        topics = EXAM_TYPES[exam]["topics"].get(subject, ["General"])
+        topic = st.selectbox("Topic", topics)
+        count = st.slider("Questions", 10, 100, 30)
+
+        today = date.today().isoformat()
+        used = user.get("daily_questions_used", 0) if user.get("last_question_date") == today else 0
+        limit = 250 if user.get("is_premium") else 200
+        remaining = limit - used
+
+        st.info(f"Daily Limit: {limit} • Remaining: {remaining}")
+
+        if st.button("Generate Exam", type="primary"):
+            if count > remaining:
+                st.error(f"Only {remaining} questions left today!")
+            else:
+                with st.spinner("AI generating fresh questions..."):
+                    questions = ai_engine.generate_exam_questions(subject, exam, count, topic)
+                if questions:
+                    st.session_state.questions = questions
+                    st.session_state.user_answers = {}
+                    db.conn.execute("UPDATE users SET daily_questions_used=?, last_question_date=? WHERE user_id=?",
+                                    (used + count, today, user["user_id"]))
+                    db.conn.commit()
+                    st.success(f"{len(questions)} unique questions loaded!")
+                else:
+                    st.error("Generation failed. Try again.")
+
         if st.session_state.questions:
             for i, q in enumerate(st.session_state.questions):
                 st.write(f"**Q{i+1}.** {q['question']}")
                 ans = st.radio("Choose", q["options"], key=f"q{i}")
-                st.session_state.user_answers[i] = ans[0]
-            if st.button("Submit"):
-                correct = sum(st.session_state.user_answers.get(i,"") == q["answer"][0] for i,q in enumerate(st.session_state.questions))
-                score = round(correct/len(st.session_state.questions)*100,1)
-                st.success(f"Score: {score}%")
-                xp = int(score * 10)
-                user["total_xp"] += xp
-                user["xp_coins"] += xp
-                st.balloons()
+                st.session_state.user_answers[i] = ans
 
-                # Log progress for premium/emperor
-                if is_emperor or user.get("is_premium"):
-                    if user["email"] not in db["progress"]:
-                        db["progress"][user["email"]] = []
-                    db["progress"][user["email"]].append({
-                        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "type": "Exam",
-                        "subject": subject,
-                        "topic": topic,
-                        "score": score
-                    })
-
-    with tab3:
-        st.header("PDF Q&A")
-        up = st.file_uploader("Upload PDF", type="pdf")
-        if up:
-            text = ""
-            for page in PyPDF2.PdfReader(BytesIO(up.getvalue())).pages:
-                text += page.extract_text() or ""
-            st.session_state.pdf_text = text[:15000]
-            st.success("PDF loaded")
-        if st.session_state.pdf_text and (q := st.chat_input("Ask PDF")):
-            r = ai.ask("Use only this text:\n" + st.session_state.pdf_text + "\n\nQuestion: " + q)
-            st.write(r)
-            if is_emperor or user.get("is_premium"):
-                db["progress"].setdefault(user["email"], []).append({
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "type": "PDF Q&A",
-                    "query": q[:50] + "..."
-                })
-
-    with tab4:
-        st.header("Progress")
-        st.metric("Total XP", f"{user.get('total_xp',0):,}")
-        st.metric("Level", user["level"])
-        if (is_emperor or user.get("is_premium")) and user["email"] in db["progress"]:
-            st.subheader("Learning Activity")
-            df = pd.DataFrame(db["progress"][user["email"]])
-            st.dataframe(df)
-        elif not (is_emperor or user.get("is_premium")):
-            st.info("Upgrade to Premium to see detailed progress")
+            if st.button("Submit Exam", type="primary"):
+                result = ai_engine.grade_mcq(st.session_state.questions, st.session_state.user_answers)
+                st.success(f"Score: {result['score']}/{result['total']} ({result['percentage']}%)")
+                if result['percentage'] >= 80:
+                    st.balloons()
+                xp = int(result['percentage'] * 2) + 100
+                award_xp(xp, "Exam Completed")
+                st.session_state.questions = []
 
     with tab5:
-        st.header("XP Shop")
+        st.header("XP Shop — Spend Your Hard-Earned Coins!")
         coins = user.get("xp_coins", 0)
-        counts = user.get("buy_counts", {})
-        items = [
-            ("20% Discount", 5000000),
-            ("Extra Questions", 100),
-            ("Custom Badge", 500000),
-            ("Extra AI Uses", 200000),
-            ("Profile Theme", 300000),
-            ("Advanced Topics", 400000),
-            ("Priority Support", 600000),
-            ("Custom Avatar", 250000)
+
+        shop_items = [
+            ("20% Lifetime Discount on Premium", 5_000_000, "shop_discount", "Get 20% off forever (KSh 480 instead of 600)"),
+            ("+50 Extra Daily Questions", 800_000, "extra_questions", "Permanently increase daily limit by 50"),
+            ("Custom Badge (Display Name)", 600_000, "custom_badge", "Show a unique badge next to your name"),
+            ("+100 Extra AI Tutor Uses", 400_000, "extra_ai_uses", "More AI interactions per day"),
+            ("Premium Profile Theme", 350_000, "profile_theme", "Unlock golden/dark theme"),
+            ("Double XP for 7 Days", 700_000, None, "All XP gains doubled for one week"),
+            ("Remove Ads Forever", 300_000, None, "Clean experience (future-proof)"),
+            ("Shoutout on Leaderboard", 250_000, None, "Your name highlighted for 30 days"),
+            ("Mystery Gift Box", 100_000, None, "Random reward: XP, coins, or premium trial"),
+            ("Support the App (Donation)", 50_000, None, "Help us grow — thank you!")
         ]
-        for name, base in items:
-            n = counts.get(name, 0)
-            price = base * (2 ** n)
-            if st.button(f"Buy {name} — {price:,} coins"):
-                if coins >= price:
-                    user["xp_coins"] -= price
-                    counts[name] = n + 1
-                    user["buy_counts"] = counts
-                    st.success("Purchased!")
-                    st.balloons()
-                else:
-                    st.error("Not enough coins")
+
+        for name, base_price, field, desc in shop_items:
+            purchases = db.conn.execute("SELECT COUNT(*) FROM purchases WHERE user_id=? AND item_name=?", (user["user_id"], name)).fetchone()[0]
+            price = base_price * (2 ** purchases)  # Exponential pricing
+
+            with st.container():
+                st.markdown(f"<div class='shop-card'>", unsafe_allow_html=True)
+                col1, col2 = st.columns([3,1])
+                with col1:
+                    st.subheader(name)
+                    st.caption(desc)
+                    st.write(f"**Price: {price:,} XP Coins** (x{purchases+1} purchased)")
+                with col2:
+                    if st.button("Buy", key=f"buy_{name}_{purchases}"):
+                        if coins >= price:
+                            db.spend_xp_coins(user["user_id"], price)
+                            db.log_purchase(user["user_id"], name, price)
+                            if field:
+                                if field == "custom_badge":
+                                    badge = st.text_input("Enter your badge text", key=f"badge_{name}")
+                                    if badge:
+                                        db.conn.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (badge, user["user_id"]))
+                                        db.conn.commit()
+                                else:
+                                    current = user.get(field, 0)
+                                    db.conn.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (current + 1, user["user_id"]))
+                                    db.conn.commit()
+                            st.success(f"Purchased {name}!")
+                            st.balloons()
+                            st.rerun()
+                        else:
+                            st.error("Not enough XP Coins")
+                st.markdown("</div>", unsafe_allow_html=True)
 
     with tab6:
-        st.header("Premium")
+        st.header("Go Premium")
         if is_emperor:
-            st.success("EMPEROR — UNLIMITED")
+            st.success("Emperor — Unlimited Access")
         elif user.get("is_premium"):
-            st.success(f"Active until {user['premium_expiry'][:10]}")
+            st.success("Premium Active")
         else:
-            st.info("Send KSh 600 to 0701617120")
-            code = st.text_input("M-Pesa Code")
-            if st.button("Submit Payment"):
-                db["payments"].append({"user_id": user["user_id"], "code": code, "time": datetime.now().isoformat()})
-                st.success("Submitted!")
+            price = 480 if user.get("shop_discount", 0) > 0 else 600
+            st.info(f"Send **KSh {price}** to **0701617120** via M-Pesa")
+            with st.form("payment"):
+                phone = st.text_input("Your Phone Number")
+                code = st.text_input("M-Pesa Transaction Code")
+                if st.form_submit_button("Submit"):
+                    db.add_payment(user["user_id"], phone, code)
+                    st.success("Payment submitted! Waiting for approval.")
 
     with tab7:
         if is_emperor:
-            st.header("EMPEROR PANEL")
-            st.balloons()
-            for u in db["users"].values():
-                with st.expander(f"{u['email']} — Level {u.get('level',1)}"):
+            st.header("Admin Panel")
+            for u in db.conn.execute("SELECT user_id, email, is_premium FROM users").fetchall():
+                u_dict = db.get_user(u["user_id"])
+                with st.expander(f"{u_dict['email']} • {'Premium' if u_dict['is_premium'] else 'Free'}"):
                     c1,c2,c3 = st.columns(3)
-                    with c1:
-                        if st.button("Ban", key=f"b{u['user_id']}"): u["is_banned"]=True
-                    with c2:
-                        if st.button("Premium", key=f"p{u['user_id']}"):
-                            u["is_premium"]=True
-                            u["premium_expiry"]=(datetime.now()+timedelta(days=30)).isoformat()
-                    with c3:
-                        if st.button("Downgrade", key=f"d{u['user_id']}"): u["is_premium"]=False
-            st.subheader("Payments")
-            for p in db["payments"]:
-                if st.button(f"Approve {p['code']}", key=p["time"]):
-                    for u in db["users"].values():
-                        if u["user_id"] == p["user_id"]:
-                            u["is_premium"]=True
-                            u["premium_expiry"]=(datetime.now()+timedelta(days=30)).isoformat()
-                            st.success("Approved!")
+                    with c1: st.button("Ban", key=f"ban{u['user_id']}"); db.ban_user(u["user_id"])
+                    with c2: st.button("Premium", key=f"prem{u['user_id']}"); db.upgrade_to_premium(u["user_id"])
+                    with c3: st.button("Basic", key=f"basic{u['user_id']}"); db.downgrade_to_basic(u["user_id"])
+            st.subheader("Pending Payments")
+            for p in db.get_pending_payments():
+                if st.button(f"Approve {p['mpesa_code']} (User {p['user_id']})"):
+                    db.approve_payment(p["id"])
+                    st.success("Approved!")
         else:
-            st.write("Only Emperor has access")
+            st.write("Access restricted.")
